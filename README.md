@@ -1,2 +1,0 @@
-# AlgorandSim
-Algorand simulator

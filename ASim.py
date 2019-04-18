@@ -9,12 +9,23 @@ class Node:
         self.iden = iden
         self.out_links = []
         self.conn_count = conn_count 
+
+        self.stake = np.random.randint(1, 51)    
+
+        self.sk = ecdsa.SigningKey.generate()
+        self.pk = self.sk.get_verifying_key()
+
+
     def message_consumer(self, in_pipe):
-        while True:
-            msg = yield in_pipe.get()
-            #TODO logic
+        pass
+        # print('id', self.iden)
+        # while True:
+            # msg = yield in_pipe.get()
+            # #TODO logic
 
     def get_output_conn(self, link):
+        """Takes a link as input, appends it to the 'out_links' list and retuns the corresponding *pipe*"""
+        # print("link from", link.src, "to", link.dest)
         self.out_links.append(link)
         return link.pipe
 
@@ -47,6 +58,7 @@ class Node:
         
     
 class Link:
+    """Link has a pipe local variable"""
     def __init__(self, env,  src, dest, delay, block_delay, capacity = simpy.core.Infinity):
         self.env = env
         self.capacity = capacity
@@ -56,16 +68,19 @@ class Link:
         self.delay = delay
         self.block_delay = block_delay
 
-# 0. create 2000 nodes
-NODE_COUNT = 8 
+# 0. create 2000 nodes + housekeeping
+NODE_COUNT = 4 
 MIN_DEG = 2
 MAX_DEG = 3
 env = simpy.Environment()
 
+pks = dict()
 nodes = list()
 node_conn_counts = np.random.randint(MIN_DEG, MAX_DEG+1, NODE_COUNT)
 for i in range(NODE_COUNT):
     nodes.append(Node(env, i, node_conn_counts[i]))
+    pks[nodes[i].iden] = nodes[i].pk
+
 
 # 1. matrix of connections
 node_conn_matrix = list()
@@ -116,9 +131,17 @@ for i in range(NODE_COUNT):
 print("m", node_conn_matrix)
 print("dm", delay_matrix)
 print("bm", block_delay_matrix)
- print("conn counts finally", node_conn_counts[np.nonzero(node_conn_counts)])
 
 # 3. create links
+for i in range(NODE_COUNT):
+    curr_node = nodes[i]
+    for j in range(len(node_conn_matrix[i])):
+        target = node_conn_matrix[i][j]
+        delay = delay_matrix[i][j]
+        block_delay = block_delay_matrix[i][j]
+        """Instantiate a link, return it to get_output_conn, get_output_conn will return the pipe which is given to the message_consumer
+        and the message_consumer will yield on it."""
+        nodes[target].message_consumer(curr_node.get_output_conn(Link(env, i, target, delay, block_delay)))
 
 # 4. call generator 
 # 5. call consumers alongwith get_output_conn

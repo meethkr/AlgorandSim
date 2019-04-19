@@ -8,9 +8,11 @@ class Node:
         # self.action #TODO
         self.iden = iden
         self.out_links = []
-        self.conn_count = conn_count 
+        self.conn_count = conn_count
 
-        self.stake = np.random.randint(1, 51)    
+        self.message_sequence_id = 0
+
+        self.stake = np.random.randint(1, 51)
 
         self.sk = ecdsa.SigningKey.generate()
         self.pk = self.sk.get_verifying_key()
@@ -55,8 +57,8 @@ class Node:
             yield self.env.timeout(link.delay)
             events.append(link.pipe.put(value))
         return self.env.all_of(events)  # Condition event for all "events"
-        
-    
+
+
 class Link:
     """Link has a pipe local variable"""
     def __init__(self, env,  src, dest, delay, block_delay, capacity = simpy.core.Infinity):
@@ -68,8 +70,12 @@ class Link:
         self.delay = delay
         self.block_delay = block_delay
 
+class Message:
+    """<Payload || Public Key || Metadata >"""
+    def __init__(self, owner_id, msg_id, )
+
 # 0. create 2000 nodes + housekeeping
-NODE_COUNT = 4 
+NODE_COUNT = 4
 MIN_DEG = 2
 MAX_DEG = 3
 env = simpy.Environment()
@@ -92,7 +98,7 @@ for i in range(NODE_COUNT):
 for i in range(NODE_COUNT):
     while i != NODE_COUNT - 1 and node_conn_counts[i] > 0:
         eflag = False
-        ti = np.random.randint(i + 1, NODE_COUNT) 
+        ti = np.random.randint(i + 1, NODE_COUNT)
         ti_old = ti
         while ((node_conn_counts[ti] == 0) or (ti in node_conn_matrix[i]) or (ti == i)):
             ti = (ti + 1) % NODE_COUNT
@@ -121,10 +127,10 @@ for i in node_conn_matrix:
 for i in range(NODE_COUNT):
     for j in node_conn_matrix[i]:
         if j > i:
-            x = int(max(np.random.normal(30, 64), 0))    
+            x = int(max(np.random.normal(30, 64), 0))
             delay_matrix[i].append(x)
             delay_matrix[j].append(x)
-            y = int(max(np.random.normal(200, 400), 0))    
+            y = int(max(np.random.normal(200, 400), 0))
             block_delay_matrix[i].append(y)
             block_delay_matrix[j].append(y)
 
@@ -143,7 +149,7 @@ for i in range(NODE_COUNT):
         and the message_consumer will yield on it."""
         nodes[target].message_consumer(curr_node.get_output_conn(Link(env, i, target, delay, block_delay)))
 
-# 4. call generator 
+# 4. call generator
 # 5. call consumers alongwith get_output_conn
 
 # env.run(until = None)

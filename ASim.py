@@ -11,6 +11,7 @@ class Node:
         self.conn_count = conn_count
 
         self.message_sequence_id = 0
+        self.recieved_id_cache = list() #TODO
 
         self.stake = np.random.randint(1, 51)
 
@@ -18,18 +19,47 @@ class Node:
         self.pk = self.sk.get_verifying_key()
 
 
-    def message_consumer(self, in_pipe):
-        pass
+    def message_consumer(self, in_link):
+        """unpack the message, verify the signature"""
         # print('id', self.iden)
-        # while True:
-            # msg = yield in_pipe.get()
-            # #TODO logic
+        while True:
+            msg = yield in_link.pipe.get()
+            c_sign = msg[1]
+            encoded_msg = msg[0]
+            payload, pk, mid, nid, m_type = encoded_msg.decode('utf-8').split("<|>")
+            nid = int(nid)
+            mid = int(mid)
+
+            if m_type == 'b':
+                yield env.timeout(in_link.block_delay)
+            else:
+                yield env.timeout(in_link.delay)
+
+            if ((mid, nid)) in self.recieved_id_cache:
+                print("Duplicate Message recieved at node" + str(self.iden) + " from node  " + str(in_link.src) + " with ID " + str(mid) + str(nid))
+                continue
+            else:
+                print("New Message recieved at node" + str(self.iden) + " from node  " + str(in_link.src) + " with ID " + str(mid) + str(nid))
+                self.recieved_id_cache.append((mid, nid))
+
+                pks[nid].verify(c_sign, encoded_msg)
+                # try:
+                    # pks[nid].verify(c_sign, encoded_msg)
+                # except Exception as e:
+                    # print(e)
+                    # print("Error occured during Public Key verification.")
+                    # continue
+
+                self.put(msg)
+            #TODO : recieve logic
+
+
 
     def get_output_conn(self, link):
         """Takes a link as input, appends it to the 'out_links' list and retuns the corresponding *pipe*"""
         # print("link from", link.src, "to", link.dest)
         self.out_links.append(link)
-        return link.pipe
+        return link
 
     # def message_generator(name, env, out_pipe):
         # while True:
@@ -48,13 +78,11 @@ class Node:
 
     def put(self, value):
         """Broadcast a *value* to all receivers."""
-        if not self.out_pipes:
+        if not self.out_links:
             raise RuntimeError('There are no output pipes.')
         # events = [store.put(value) for store in self.out_pipes]
         events = []
         for link in self.out_links:
-            #TODO: Unpack value and decide on yield delay
-            yield self.env.timeout(link.delay)
             events.append(link.pipe.put(value))
         return self.env.all_of(events)  # Condition event for all "events"
 
@@ -71,8 +99,21 @@ class Link:
         self.block_delay = block_delay
 
 class Message:
-    """<Payload || Public Key || Metadata >"""
-    def __init__(self, owner_id, msg_id, )
+    """<Payload || Public Key || Message ID || Node ID >, signature"""
+    def __init__(self, node, payload, m_type):
+        self.payload = payload
+        self.m_type = m_type # non-block & block
+
+        self.node_id = node.iden
+        self.msg_id = node.message_sequence_id
+        node.message_sequence_id += 1
+        self.publickey = node.pk
+
+        self.message_string = (str(self.payload) + "<|>" + str(self.publickey) + "<|>" +\
+                str(self.msg_id) + "<|>" + str(self.node_id) + "<|>" + str(self.m_type)).encode('utf-8')
+        self.signature = node.sk.sign(self.message_string)
+
+        self.message = (self.message_string, self.signature)
 
 # 0. create 2000 nodes + housekeeping
 NODE_COUNT = 4
@@ -147,9 +188,20 @@ for i in range(NODE_COUNT):
         block_delay = block_delay_matrix[i][j]
         """Instantiate a link, return it to get_output_conn, get_output_conn will return the pipe which is given to the message_consumer
         and the message_consumer will yield on it."""
-        nodes[target].message_consumer(curr_node.get_output_conn(Link(env, i, target, delay, block_delay)))
+        env.process(nodes[target].message_consumer(curr_node.get_output_conn(Link(env, i, target, delay, block_delay))))
 
+print("publickeys", pks)
 # 4. call generator
 # 5. call consumers alongwith get_output_conn
 
-# env.run(until = None)
+#6. TEST 
+######################
+m = Message(nodes[0], "hello there", 'b')
+nodes[0].put(m.message)
+
+
+
+#####################
+# END TEST
+
+env.run(until = None)

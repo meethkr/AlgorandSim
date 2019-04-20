@@ -36,10 +36,15 @@ class Node:
                 yield env.timeout(in_link.delay)
 
             if ((mid, nid)) in self.recieved_id_cache:
-                print("Duplicate Message recieved at node" + str(self.iden) + " from node  " + str(in_link.src) + " with ID " + str(mid) + str(nid))
+                print("Duplicate Message \'" + str(payload) + "\' recieved at node" + str(self.iden) + " from node  " \
+                        + str(in_link.src) + " with ID " + str(mid) + str(nid) \
+                        + " at " + str(env.now))
                 continue
             else:
-                print("New Message recieved at node" + str(self.iden) + " from node  " + str(in_link.src) + " with ID " + str(mid) + str(nid))
+                print("New Message \'"  +  str(payload) + "\' recieved at node"  + str(self.iden) + " from node  " +  \
+                        str(in_link.src) + " with ID " + str(mid) + str(nid) \
+                        + " at " + str(env.now))
+
                 self.recieved_id_cache.append((mid, nid))
 
                 pks[nid].verify(c_sign, encoded_msg)
@@ -194,10 +199,12 @@ print("publickeys", pks)
 # 4. call generator
 # 5. call consumers alongwith get_output_conn
 
-#6. TEST 
+#6. TEST
 ######################
 m = Message(nodes[0], "hello there", 'b')
+m2 = Message(nodes[0], "there", 'b')
 nodes[0].put(m.message)
+nodes[0].put(m2.message)
 
 
 

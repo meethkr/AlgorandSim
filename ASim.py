@@ -1,7 +1,23 @@
 import simpy
+import scipy
 import ecdsa
 import numpy as np
+import random
 
+### PARAMETERS
+NODE_COUNT = 4
+MIN_DEG = 2
+MAX_DEG = 3
+
+T_PROPOSER = 20
+T_STEP = 200
+T_FINAL = 200
+
+#### END OF PARAMETERS
+
+
+
+#### CLASSES
 class Node:
     def __init__(self, env, iden, conn_count):
         self.env = env
@@ -91,6 +107,26 @@ class Node:
             events.append(link.pipe.put(value))
         return self.env.all_of(events)  # Condition event for all "events"
 
+    def sortition(self, s, thold, role):
+        hsh = PRG(s)
+        p = thold / W_total_stake
+        j = 0
+        k = 0
+        lower = scipy.stats.binom.pmf(k, self.stake, p)
+        higher = lower + scipy.stats.binom.pmf(k + 1, self.stake, p)
+        x = (hsh / 2 ** 256) 
+        while x not in range(lower, higher):
+            j++
+            lower = 0
+            higher = 0
+
+            for k in range(0, j+1):
+                lower += scipy.stats.binom.pmf(k, self.stake, p)
+
+            higher = lower + scipy.stats.binom.pmf(k, self.stake, p)
+
+        return (hsh, j)
+
 
 class Link:
     """Link has a pipe local variable"""
@@ -120,19 +156,34 @@ class Message:
 
         self.message = (self.message_string, self.signature)
 
+
+## PUBLIC FUNCTIONS
+def PRG(s):
+    x = 0
+    for i in str(s):
+        x += ord(i)
+    random.seed(x)
+    return random.getrandbits(256)
+
+
+
+
+## END OF PUBLIC FUNCTIONS
+
 # 0. create 2000 nodes + housekeeping
-NODE_COUNT = 4
-MIN_DEG = 2
-MAX_DEG = 3
 env = simpy.Environment()
 
 pks = dict()
 nodes = list()
+W_total_stake = 0
 node_conn_counts = np.random.randint(MIN_DEG, MAX_DEG+1, NODE_COUNT)
+
 for i in range(NODE_COUNT):
     nodes.append(Node(env, i, node_conn_counts[i]))
     pks[nodes[i].iden] = nodes[i].pk
+    W_total_stake += nodes[i].stake
 
+print("Total stake:", W_total_stake)
 
 # 1. matrix of connections
 node_conn_matrix = list()

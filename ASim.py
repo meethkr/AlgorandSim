@@ -1,5 +1,5 @@
 import simpy
-import scipy
+import scipy.stats
 import ecdsa
 import numpy as np
 import random
@@ -38,12 +38,12 @@ class Node:
         self.sk = ecdsa.SigningKey.generate()
         self.pk = self.sk.get_verifying_key()
 
-        self.input_buffer = dict
+        self.input_buffer = dict()
 
 
     def message_consumer(self, in_link):
         """unpack the message, verify the signature"""
-        # print('id', self.iden)
+        # # print('id', self.iden)
         while True:
             msg = yield in_link.pipe.get()
             c_sign = msg[1]
@@ -51,44 +51,89 @@ class Node:
             payload, pk, mid, nid, m_type, roundn, stepn = encoded_msg.decode('utf-8').split("<|>")
             nid = int(nid)
             mid = int(mid)
+            roundn = int(roundn)
+            stepn = int(stepn)
 
             if m_type == 'b':
                 yield env.timeout(in_link.block_delay)
+                # print("Block message recieved at", str(self.iden), "from node", str(in_link.src))
             else:
                 yield env.timeout(in_link.delay)
 
             if ((mid, nid)) in self.recieved_id_cache:
-                print("Duplicate Message \'" + str(payload) + "\' recieved at node" + str(self.iden) + " from node  " \
-                        + str(in_link.src) + " with ID " + str(mid) + str(nid) \
-                        + " at " + str(env.now))
+                # print("Duplicate Message \'" + str(payload) + "\' recieved at node" + str(self.iden) + " from node  " \
+                        # + str(in_link.src) + " with ID " + str(mid) + str(nid) \
+                        # + " at " + str(env.now))
                 continue
             else:
-                print("New Message \'"  +  str(payload) + "\' recieved at node"  + str(self.iden) + " from node  " +  \
-                        str(in_link.src) + " with ID " + str(mid) + str(nid) \
-                        + " at " + str(env.now))
+                # print("New Message \'"  +  str(payload) + "\' recieved at node"  + str(self.iden) + " from node  " +  \
+                        # str(in_link.src) + " with ID " + str(mid) + str(nid) \
+                        # + " at " + str(env.now))
 
                 self.recieved_id_cache.append((mid, nid))
                 self.input_buffer.setdefault((roundn, stepn), []).append(msg)
+                # print("input buffer at node", self.iden, ":", self.input_buffer)
                 pks[nid].verify(c_sign, encoded_msg)
                 # try:
                     # pks[nid].verify(c_sign, encoded_msg)
                 # except Exception as e:
-                    # print(e)
-                    # print("Error occured during Public Key verification.")
+                    # # print(e)
+                    # # print("Error occured during Public Key verification.")
                     # continue
 
                 self.put(msg)
 
     def get_output_conn(self, link):
         """Takes a link as input, appends it to the 'out_links' list and retuns the corresponding *pipe*"""
-        # print("link from", link.src, "to", link.dest)
+        # # print("link from", link.src, "to", link.dest)
         self.out_links.append(link)
         return link
 
-    def message_generator(,self, env):
+    def message_generator(self, env):
         while True:
+            # print("generator called at", self.iden)
             # wait for next transmission
+            # self.block_proposal()
+
+
+            # print("Block proposal called at", self.iden)
+            round_no = prev_block.height
+            prev_hsh = prev_block.hsh
+            hsh, j = self.sortition((prev_hsh, str(round_no), 0), T_PROPOSER, 'r') #TODO change 'r' to role
+
+            if j > 0:
+                print("found a guy")
+                hx = hashlib.sha256((str(hsh) + str(1)).encode()).hexdigest() #priority
+                jx = 1          #corresponding id
+                for i in range(2, j+1):
+                    h = hashlib.sha256((str(hsh) + str(i)).encode()).hexdigest()
+                    if h < hx:
+                        hx = h
+                        jx = i
+
+                gossip_body = str(round_no) + "<$>" + str(hsh) + "<$>" + str(jx) + "<$>" + str(hx)
+                gossip_msg = Message(self, gossip_body, 'nb', round_no, 0)
+                self.put(gossip_msg.message)
+                yield env.timeout(LAMBDA_PROPOSER) #TODO : Decide the delays
+                p_vals = list()
+                try:
+                    for msg in self.input_buffer[(round_no, 0)]:
+                        c_sign = msg[1]
+                        encoded_msg = msg[0]
+                        payload, pk, mid, nid, m_type, roundn, stepn = encoded_msg.decode('utf-8').split("<|>")
+                        rn, hs, subuser, priority = payload.split("<$>")
+                        p_vals.append(priority)
+                except KeyError as e:
+                    print("No matching keys", e)
+                least_p_val = min(p_vals)
+                if hx == least_p_val:
+                    bp_message_payload = str(prev_hsh) + "<@>" + str(random.getrandbits(32)) + "<@>" + gossip_body
+                    bp_message_object = Message(self, bp_message_payload, 'b', round_no, 0)
+                    self.put(bp_message_object.message)
+                    print("Block proposer selected", self.iden)
+
             yield env.timeout(random.randint(6, 10)) #TODO : Decide the delays
+
 
 
 
@@ -104,6 +149,7 @@ class Node:
         return self.env.all_of(events)  # Condition event for all "events"
 
     def sortition(self, s, thold, role):
+        # print("sortition called at", self.iden)
         hsh = PRG(s)
         p = thold / W_total_stake
         j = 0
@@ -111,8 +157,10 @@ class Node:
         lower = scipy.stats.binom.pmf(k, self.stake, p)
         higher = lower + scipy.stats.binom.pmf(k + 1, self.stake, p)
         x = (hsh / (2 ** 256))
-        while x not in range(lower, higher):
-            j++
+        # print('x', x)
+        # print('lower, higher', lower, higher)
+        while x >= lower and x < higher:
+            j += 1
             lower = 0
             higher = 0
 
@@ -120,45 +168,43 @@ class Node:
                 lower += scipy.stats.binom.pmf(k, self.stake, p)
 
             higher = lower + scipy.stats.binom.pmf(k, self.stake, p)
-
+        # print("returning j", j)
         return (hsh, j)
 
-    def block_proposal(self):
-        round_no = prev_block.height
-        prev_hsh = prev_block.hsh
-        hsh, j = self.sortition((prev_hsh, str(round_no), 0), T_PROPOSER, 'r') #TODO change 'r' to role
-
-        if j > 0:
-            hx = 2 ** 257   #priority
-            jx = 1          #corresponding id
-            for i in range(1, j+1):
-                h = hashlib.sha256(str(hsh) + str(i)).hexdigest()
-                if h < hx:
-                    hx = h
-                    jx = j
-
-            gossip_body = str(round_no) + "<$>" + str(hsh) + "<$>" + str(jx) + "<$>" + str(hx)
-            gossip_msg = Message(self, gossip_body, 'nb', round_no, 0)
-            self.put(gossip_msg.message)
-            yield env.timeout(LAMBDA_PROPOSER) #TODO : Decide the delays
-            least_p_val = 2 ** 257
-            for msg in self.input_buffer[(round_no, 0)]:
-                c_sign = msg[1]
-                encoded_msg = msg[0]
-                payload, pk, mid, nid, m_type, roundn, stepn = encoded_msg.decode('utf-8').split("<|>")
-                rn, hs, subuser, priority = payload.split("<$>")
-                least_p_val = min(least_p_val, priority)
-
-            if hx == least_p_val:
-                bp_message_payload = str(prev_hsh) + "<|>" + str(random.getrandbits(32)) + "<|>" +  gossip_body
-                bp_message_object = Message(self, bp_message_payload, 'b', round_no, 0)
-
-
-
-
-
-
-
+    # def block_proposal(self):
+    #     # print("Block proposal called at", self.iden)
+    #     round_no = prev_block.height
+    #     prev_hsh = prev_block.hsh
+    #     hsh, j = self.sortition((prev_hsh, str(round_no), 0), T_PROPOSER, 'r') #TODO change 'r' to role
+    #
+    #     if j > 0:
+    #         hx = 2 ** 257   #priority
+    #         jx = 1          #corresponding id
+    #         for i in range(1, j+1):
+    #             h = hashlib.sha256(str(hsh) + str(i)).hexdigest()
+    #             if h < hx:
+    #                 hx = h
+    #                 jx = j
+    #
+    #         gossip_body = str(round_no) + "<$>" + str(hsh) + "<$>" + str(jx) + "<$>" + str(hx)
+    #         gossip_msg = Message(self, gossip_body, 'nb', round_no, 0)
+    #         self.put(gossip_msg.message)
+    #         yield env.timeout(LAMBDA_PROPOSER) #TODO : Decide the delays
+    #         least_p_val = 2 ** 257
+    #         for msg in self.input_buffer[(round_no, 0)]:
+    #             c_sign = msg[1]
+    #             encoded_msg = msg[0]
+    #             payload, pk, mid, nid, m_type, roundn, stepn = encoded_msg.decode('utf-8').split("<|>")
+    #             rn, hs, subuser, priority = payload.split("<$>")
+    #             least_p_val = min(least_p_val, priority)
+    #
+    #         if hx == least_p_val:
+    #             bp_message_payload = str(prev_hsh) + "<@>" + str(random.getrandbits(32)) + "<@>" + gossip_body
+    #             bp_message_object = Message(self, bp_message_payload, 'b', round_no, 0)
+    #             self.put(bp_message_object.message)
+    #             # print("Block proposer selected", self.iden)
+    #
+    #     yield env.timeout(random.randint(6, 10)) #TODO : Decide the delays
 
 
 class Link:
@@ -186,7 +232,7 @@ class Message:
         self.publickey = node.pk
 
         self.message_string = (str(self.payload) + "<|>" + str(self.publickey) + "<|>" +\
-                str(self.msg_id) + "<|>" + str(self.node_id) + "<|>" + str(self.m_type)).encode('utf-8') + "<|>" str(roundn) + "<|>" str(stepn)
+                str(self.msg_id) + "<|>" + str(self.node_id) + "<|>" + str(self.m_type) + "<|>" + str(roundn) + "<|>" + str(stepn)).encode('utf-8')
         self.signature = node.sk.sign(self.message_string)
 
         self.message = (self.message_string, self.signature)
@@ -198,6 +244,8 @@ class Block:
         self.block = str(prev_hsh) + str(s)
         self.hsh = hashlib.sha256(self.block.encode()).hexdigest()
         self.height = prev_height + 1
+
+### END OF CLASSES
 
 ## PUBLIC FUNCTIONS
 def PRG(s):
@@ -220,7 +268,7 @@ for i in range(NODE_COUNT):
     pks[nodes[i].iden] = nodes[i].pk
     W_total_stake += nodes[i].stake
 
-print("Total stake:", W_total_stake)
+# print("Total stake:", W_total_stake)
 
 # 1. matrix of connections
 node_conn_matrix = list()
@@ -268,13 +316,16 @@ for i in range(NODE_COUNT):
             block_delay_matrix[i].append(y)
             block_delay_matrix[j].append(y)
 
-print("m", node_conn_matrix)
-print("dm", delay_matrix)
-print("bm", block_delay_matrix)
+# print("m", node_conn_matrix)
+# print("dm", delay_matrix)
+# print("bm", block_delay_matrix)
+gb = Block(None, "We are buildling the best Algorand Discrete Event Simulator", -1)
+prev_block = gb  # to know the current leader block
 
 # 3. create links
 for i in range(NODE_COUNT):
     curr_node = nodes[i]
+    env.process(curr_node.message_generator(env))
     for j in range(len(node_conn_matrix[i])):
         target = node_conn_matrix[i][j]
         delay = delay_matrix[i][j]
@@ -283,19 +334,17 @@ for i in range(NODE_COUNT):
         and the message_consumer will yield on it."""
         env.process(nodes[target].message_consumer(curr_node.get_output_conn(Link(env, i, target, delay, block_delay))))
 
-print("publickeys", pks)
+
+
+# print("publickeys", pks)
 # 4. call generator
 # 5. call consumers alongwith get_output_conn
-# 6. Genesis block
-gb = Block(None, "We are buildling the best Algorand Discrete Event Simulator", -1)
-prev_block = gb  # to know the current leader block
-
 # x. TEST
 ######################
-m = Message(nodes[0], "hello there", 'b', -1, -1)
-m2 = Message(nodes[0], "there", 'b', -1, -1)
-nodes[0].put(m.message)
-nodes[0].put(m2.message)
+# m = Message(nodes[0], "hello there", 'b', -1, -1)
+# m2 = Message(nodes[0], "there", 'b', -1, -1)
+# nodes[0].put(m.message)
+# nodes[0].put(m2.message)
 
 
 

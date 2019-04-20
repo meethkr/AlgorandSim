@@ -3,6 +3,8 @@ import scipy
 import ecdsa
 import numpy as np
 import random
+import hashlib
+
 
 ### PARAMETERS
 NODE_COUNT = 4
@@ -13,6 +15,8 @@ T_PROPOSER = 20
 T_STEP = 200
 T_FINAL = 200
 
+LAMBDA_PROPOSER = 3 * 1000
+LAMBDA_BLOCK = 30 * 1000
 #### END OF PARAMETERS
 
 
@@ -34,6 +38,8 @@ class Node:
         self.sk = ecdsa.SigningKey.generate()
         self.pk = self.sk.get_verifying_key()
 
+        self.input_buffer = dict
+
 
     def message_consumer(self, in_link):
         """unpack the message, verify the signature"""
@@ -42,7 +48,7 @@ class Node:
             msg = yield in_link.pipe.get()
             c_sign = msg[1]
             encoded_msg = msg[0]
-            payload, pk, mid, nid, m_type = encoded_msg.decode('utf-8').split("<|>")
+            payload, pk, mid, nid, m_type, roundn, stepn = encoded_msg.decode('utf-8').split("<|>")
             nid = int(nid)
             mid = int(mid)
 
@@ -62,7 +68,7 @@ class Node:
                         + " at " + str(env.now))
 
                 self.recieved_id_cache.append((mid, nid))
-
+                self.input_buffer.setdefault((roundn, stepn), []).append(msg)
                 pks[nid].verify(c_sign, encoded_msg)
                 # try:
                     # pks[nid].verify(c_sign, encoded_msg)
@@ -72,9 +78,6 @@ class Node:
                     # continue
 
                 self.put(msg)
-            #TODO : recieve logic
-
-
 
     def get_output_conn(self, link):
         """Takes a link as input, appends it to the 'out_links' list and retuns the corresponding *pipe*"""
@@ -82,20 +85,13 @@ class Node:
         self.out_links.append(link)
         return link
 
-    # def message_generator(name, env, out_pipe):
-        # while True:
-            # # wait for next transmission
-            # yield env.timeout(random.randint(6, 10))
+    def message_generator(,self, env):
+        while True:
+            # wait for next transmission
+            yield env.timeout(random.randint(6, 10)) #TODO : Decide the delays
 
-            # # messages are time stamped to later check if the consumer was
-            # # late getting them.  Note, using event.triggered to do this may
-            # # result in failure due to FIFO nature of simulation yields.
-            # # (i.e. if at the same env.now, message_generator puts a message
-            # # in the pipe first and then message_consumer gets from pipe,
-            # # the event.triggered will be True in the other order it will be
-            # # False
-            # msg = (env.now, '%s says hello at %d' % (name, env.now))
-            # out_pipe.put(msg)
+
+
 
     def put(self, value):
         """Broadcast a *value* to all receivers."""
@@ -114,7 +110,7 @@ class Node:
         k = 0
         lower = scipy.stats.binom.pmf(k, self.stake, p)
         higher = lower + scipy.stats.binom.pmf(k + 1, self.stake, p)
-        x = (hsh / 2 ** 256) 
+        x = (hsh / (2 ** 256))
         while x not in range(lower, higher):
             j++
             lower = 0
@@ -126,6 +122,43 @@ class Node:
             higher = lower + scipy.stats.binom.pmf(k, self.stake, p)
 
         return (hsh, j)
+
+    def block_proposal(self):
+        round_no = prev_block.height
+        prev_hsh = prev_block.hsh
+        hsh, j = self.sortition((prev_hsh, str(round_no), 0), T_PROPOSER, 'r') #TODO change 'r' to role
+
+        if j > 0:
+            hx = 2 ** 257   #priority
+            jx = 1          #corresponding id
+            for i in range(1, j+1):
+                h = hashlib.sha256(str(hsh) + str(i)).hexdigest()
+                if h < hx:
+                    hx = h
+                    jx = j
+
+            gossip_body = str(round_no) + "<$>" + str(hsh) + "<$>" + str(jx) + "<$>" + str(hx)
+            gossip_msg = Message(self, gossip_body, 'nb', round_no, 0)
+            self.put(gossip_msg.message)
+            yield env.timeout(LAMBDA_PROPOSER) #TODO : Decide the delays
+            least_p_val = 2 ** 257
+            for msg in self.input_buffer[(round_no, 0)]:
+                c_sign = msg[1]
+                encoded_msg = msg[0]
+                payload, pk, mid, nid, m_type, roundn, stepn = encoded_msg.decode('utf-8').split("<|>")
+                rn, hs, subuser, priority = payload.split("<$>")
+                least_p_val = min(least_p_val, priority)
+
+            if hx == least_p_val:
+                bp_message_payload = str(prev_hsh) + "<|>" + str(random.getrandbits(32)) + "<|>" +  gossip_body
+                bp_message_object = Message(self, bp_message_payload, 'b', round_no, 0)
+
+
+
+
+
+
+
 
 
 class Link:
@@ -141,9 +174,11 @@ class Link:
 
 class Message:
     """<Payload || Public Key || Message ID || Node ID >, signature"""
-    def __init__(self, node, payload, m_type):
+    def __init__(self, node, payload, m_type, roundn, stepn):
         self.payload = payload
         self.m_type = m_type # non-block & block
+        self.roundn = roundn
+        self.stepn = stepn
 
         self.node_id = node.iden
         self.msg_id = node.message_sequence_id
@@ -151,21 +186,23 @@ class Message:
         self.publickey = node.pk
 
         self.message_string = (str(self.payload) + "<|>" + str(self.publickey) + "<|>" +\
-                str(self.msg_id) + "<|>" + str(self.node_id) + "<|>" + str(self.m_type)).encode('utf-8')
+                str(self.msg_id) + "<|>" + str(self.node_id) + "<|>" + str(self.m_type)).encode('utf-8') + "<|>" str(roundn) + "<|>" str(stepn)
         self.signature = node.sk.sign(self.message_string)
 
         self.message = (self.message_string, self.signature)
 
+class Block:
+    def __init__(self, prev_hsh, s, prev_height):
+        self.prev_hsh = prev_hsh
+        self.s = s
+        self.block = str(prev_hsh) + str(s)
+        self.hsh = hashlib.sha256(self.block.encode()).hexdigest()
+        self.height = prev_height + 1
 
 ## PUBLIC FUNCTIONS
 def PRG(s):
-    x = 0
-    for i in str(s):
-        x += ord(i)
-    random.seed(x)
+    random.seed(str(s))
     return random.getrandbits(256)
-
-
 
 
 ## END OF PUBLIC FUNCTIONS
@@ -249,11 +286,14 @@ for i in range(NODE_COUNT):
 print("publickeys", pks)
 # 4. call generator
 # 5. call consumers alongwith get_output_conn
+# 6. Genesis block
+gb = Block(None, "We are buildling the best Algorand Discrete Event Simulator", -1)
+prev_block = gb  # to know the current leader block
 
-#6. TEST
+# x. TEST
 ######################
-m = Message(nodes[0], "hello there", 'b')
-m2 = Message(nodes[0], "there", 'b')
+m = Message(nodes[0], "hello there", 'b', -1, -1)
+m2 = Message(nodes[0], "there", 'b', -1, -1)
 nodes[0].put(m.message)
 nodes[0].put(m2.message)
 

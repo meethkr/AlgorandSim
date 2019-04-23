@@ -8,7 +8,7 @@ import hashlib
 
 
 ### PARAMETERS
-NODE_COUNT = 8
+NODE_COUNT = 4
 MIN_DEG = 2
 MAX_DEG = 3
 
@@ -19,9 +19,9 @@ T_PROPOSER = 20
 T_STEP = 200
 T_FINAL = 200
 
-LAMBDA_PROPOSER = 3 * 1000
-LAMBDA_BLOCK = 30 * 1000
-LAMBDA_STEP = 3 * 1000
+LAMBDA_PROPOSER = 3 * 10000
+LAMBDA_BLOCK = 30 * 10000
+LAMBDA_STEP = 3 * 10000
 
 MAX_STEPS = 15
 FINAL_STEP = MAX_STEPS + 1
@@ -65,29 +65,29 @@ class Node:
 			stepn = int(stepn)
 
 			if m_type == 'b':
-				env.process(self.delay(env, in_link.block_delay))
-				#yield env.timeout(in_link.block_delay)
+				yield env.timeout(in_link.block_delay)
 				#print("Block message recieved at", str(self.iden), "from node", str(in_link.src))
 			else:
-				env.process(self.delay(env, in_link.delay))
-				#yield env.timeout(in_link.delay)
+				yield env.timeout(in_link.delay)
 
 			if ((mid, nid)) in self.recieved_id_cache:
-				# print("Duplicate Message \'" + str(payload) + "\' recieved at node" + str(self.iden) + " from node  " \
-						# + str(in_link.src) + " with ID " + str(mid) + str(nid) \
-						# + " at " + str(env.now))
+				print("Duplicate Message " + "recieved at node" + str(self.iden) + " from node  " \
+						+ str(in_link.src) + " with ID " + str(mid) + str(nid) \
+						+ " at " + str(env.now))
 				continue
 			else:
-				# print("New Message \'"  +  str(payload) + "\' recieved at node"  + str(self.iden) + " from node  " +  \
-						# str(in_link.src) + " with ID " + str(mid) + str(nid) \
-						# + " at " + str(env.now))
+				print("New Message " + "recieved at node"  + str(self.iden) + " from node  " +  \
+						str(in_link.src) + " with ID " + str(mid) + str(nid) \
+						+ " at " + str(env.now))
 
 				self.recieved_id_cache.append((mid, nid))
 				self.input_buffer.setdefault((roundn, stepn), []).append(msg)
 				#print("input buffer at node", self.iden, ":", self.input_buffer)
 
+				nid = int(nid)
 				if ecdsa.verify(c_sign, decoded_msg, pks[nid]):
-					print("Key verification successful")
+					pass
+					#print("Key verification successful")
 				else:
 					print("Error occured during Public Key verification.")
 					continue
@@ -124,6 +124,7 @@ class Node:
 
 				gossip_body = str(round_no) + "<$>" + str(hsh) + "<$>" + str(j) + "<$>" + str(hx)
 				gossip_msg = Message(self, gossip_body, 'nb', round_no, step)
+				self.recieved_id_cache.append((gossip_msg.msg_id, gossip_msg.node_id))
 				self.put(gossip_msg.message)
 
 				#env.process(self.delay(env, LAMBDA_PROPOSER))
@@ -147,6 +148,7 @@ class Node:
 					proposed_block = Block(prev_block.hsh, rand_string, prev_block.height)
 					bp_message_payload = str(prev_hsh) + "<@>" + rand_string + "<@>" + gossip_body
 					bp_message_object = Message(self, bp_message_payload, 'b', round_no, step)
+					self.recieved_id_cache.append((bp_message_object.msg_id, bp_message_object.node_id))
 					self.put(bp_message_object.message)
 					print("Block proposer selected", self.iden)
 
@@ -156,6 +158,10 @@ class Node:
 			else:
 				#env.process(self.delay(env, LAMBDA_BLOCK))
 				yield env.timeout(LAMBDA_BLOCK)
+		
+			print("Before Before Before Before Node: " + str(self.iden) + " Time: " + str(env.now))
+			yield env.timeout(10000)
+			print("After After After After Node: " + str(self.iden) + " Time: " + str(env.now))
 
 			try:
 				for msg in self.input_buffer[(round_no, step)]:
@@ -177,9 +183,9 @@ class Node:
 
 			print("Starting Reduction on block " + proposed_block.s + " from node " + str(self.iden))
 			cur_block = yield env.process(self.reduction(proposed_block, round_no, prev_hsh))
-			print("After Reduction", self.iden)
+			#print("After Reduction", self.iden)
 			final_block = yield env.process(self.binaryBA(round_no, cur_block, prev_hsh))
-			print("After BinaryBA", self.iden)
+			#print("After BinaryBA", self.iden)
 			hash_block = self.count_votes(round_no, FINAL_STEP, T_FINAL, COMMITTEE_FINAL_FACTOR)
 
 			#TODO final consensus logic
@@ -226,18 +232,16 @@ class Node:
 
 			higher = lower + scipy.stats.binom.pmf(k, self.stake, p)
 			#print('lower, higher', lower, higher)
-		#print("returning j", j)
+		print("Sortition called by Node " + str(self.iden) + " returned sub user count " + str(j))
 		return (hsh, j)
 
 	def reduction(self, block, round_no, prev_hsh):
-		print("Reduction called by: " + str(self.iden))
+		#print("Reduction called by: " + str(self.iden))
 		v_hash, v_j = self.sortition((prev_hsh, round_no, 0), T_PROPOSER, 'r')
 		step = 1
 
-		print("Starting Committee Vote for Node " + str(self.iden) + " time: " + str(env.now))
 		self.committee_vote(prev_hsh, round_no, step, T_STEP, block, v_hash, v_j)
 		yield env.timeout(LAMBDA_STEP)
-		print("Ending Committee Vote for Node " + str(self.iden) + " time: " + str(env.now))
 
 		hash_block = self.count_votes(round_no, step, T_STEP, COMMITTEE_STEP_FACTOR)
 
@@ -268,6 +272,7 @@ class Node:
 			 + str(step) + "<$>" + str(v_j) + "<$>" + str(v_hash)
 			vote_msg = Message(self, vote_body, 'nb', round_no, step)
 			print("Voting for step: " + str(step))
+			self.recieved_id_cache.append((vote_msg.msg_id, vote_msg.node_id))		
 			self.put(vote_msg.message)
 
 
@@ -281,8 +286,10 @@ class Node:
 				payload, pk, mid, nid, m_type, roundn, stepn = decoded_msg.split("<|>")
 				prev_hsh, cur_hsh, r_no, s_no, v_j, v_hash = payload.split("<$>")
 
+				nid = int(nid)
 				if ecdsa.verify(c_sign, decoded_msg, pks[nid]):
-					print("Key verification successful")
+					pass
+					#print("Key verification successful")
 				else:
 					print("Error occured during Public Key verification.")
 					continue
@@ -370,8 +377,10 @@ class Node:
 				payload, pk, mid, nid, m_type, roundn, stepn = decoded_msg.split("<|>")
 				prev_hsh, cur_hsh, r_no, s_no, v_j, v_hash = payload.split("<$>")
 
+				nid = int(nid)
 				if ecdsa.verify(c_sign, decoded_msg, pks[nid]):
-					print("Key verification successful")
+					pass
+					#print("Key verification successful")
 				else:
 					print("Error occured during Public Key verification.")
 					votes = 0
@@ -506,7 +515,7 @@ for i in range(NODE_COUNT):
 			block_delay_matrix[i].append(y)
 			block_delay_matrix[j].append(y)
 
-# print("m", node_conn_matrix)
+print("m", node_conn_matrix)
 # print("dm", delay_matrix)
 # print("bm", block_delay_matrix)
 gb = Block(None, "We are buildling the best Algorand Discrete Event Simulator", -1)

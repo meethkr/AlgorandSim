@@ -7,9 +7,12 @@ import hashlib
 
 
 ### PARAMETERS
-NODE_COUNT = 4
+NODE_COUNT = 8
 MIN_DEG = 2
 MAX_DEG = 3
+
+COMMITTEE_STEP_FACTOR = 0.685
+COMMITTEE_FINAL_FACTOR = 0.74 
 
 T_PROPOSER = 20
 T_STEP = 200
@@ -18,6 +21,9 @@ T_FINAL = 200
 LAMBDA_PROPOSER = 3 * 1000
 LAMBDA_BLOCK = 30 * 1000
 LAMBDA_STEP = 3 * 1000
+
+MAX_STEPS = 15
+FINAL_STEP = MAX_STEPS + 1
 #### END OF PARAMETERS
 
 
@@ -40,7 +46,10 @@ class Node:
 		self.pk = self.sk.get_verifying_key()
 
 		self.input_buffer = dict()
+		self.count_value = dict()
 
+	def delay(self, env, timeout_n):
+		yield env.timeout(timeout_n)
 
 	def message_consumer(self, in_link):
 		"""unpack the message, verify the signature"""
@@ -56,10 +65,12 @@ class Node:
 			stepn = int(stepn)
 
 			if m_type == 'b':
-				yield env.timeout(in_link.block_delay)
-				# print("Block message recieved at", str(self.iden), "from node", str(in_link.src))
+				env.process(self.delay(env, in_link.block_delay))
+				#yield env.timeout(in_link.block_delay)
+				#print("Block message recieved at", str(self.iden), "from node", str(in_link.src))
 			else:
-				yield env.timeout(in_link.delay)
+				env.process(self.delay(env, in_link.delay))
+				#yield env.timeout(in_link.delay)
 
 			if ((mid, nid)) in self.recieved_id_cache:
 				# print("Duplicate Message \'" + str(payload) + "\' recieved at node" + str(self.iden) + " from node  " \
@@ -73,14 +84,13 @@ class Node:
 
 				self.recieved_id_cache.append((mid, nid))
 				self.input_buffer.setdefault((roundn, stepn), []).append(msg)
-				# print("input buffer at node", self.iden, ":", self.input_buffer)
-				pks[nid].verify(c_sign, encoded_msg)
-				# try:
-					# pks[nid].verify(c_sign, encoded_msg)
-				# except Exception as e:
-					# # print(e)
-					# # print("Error occured during Public Key verification.")
-					# continue
+				#print("input buffer at node", self.iden, ":", self.input_buffer)
+				try:
+					pks[nid].verify(c_sign, encoded_msg)
+				except Exception as e:
+					print(e)
+					print("Error occured during Public Key verification.")
+					continue
 
 				self.put(msg)
 
@@ -91,15 +101,19 @@ class Node:
 		return link
 
 	def message_generator(self, env):
-		while True:
-			# print("generator called at", self.iden)
-
+		while True:	
+			self.input_buffer = dict()
+			self.count_value = dict()
+			print("generator called at", self.iden)
+			step = 0
+			global prev_block
 			round_no = prev_block.height
 			prev_hsh = prev_block.hsh
-			hsh, j = self.sortition((prev_hsh, str(round_no), 0), T_PROPOSER, 'r') #TODO change 'r' to role
+			hsh, j = self.sortition((prev_hsh, round_no, step), T_PROPOSER, 'r') #TODO change 'r' to role
 
+			proposed_block = None
 			if j > 0:
-				print("found a guy")
+				#print("found a guy", self.iden)
 				hx = hashlib.sha256((str(hsh) + str(1)).encode()).hexdigest() #priority
 				jx = 1          #corresponding id
 				for i in range(2, j+1):
@@ -109,14 +123,15 @@ class Node:
 						jx = i
 
 				gossip_body = str(round_no) + "<$>" + str(hsh) + "<$>" + str(j) + "<$>" + str(hx)
-				gossip_msg = Message(self, gossip_body, 'nb', round_no, 0)
+				gossip_msg = Message(self, gossip_body, 'nb', round_no, step)
 				self.put(gossip_msg.message)
 				
+				#env.process(self.delay(env, LAMBDA_PROPOSER))
 				yield env.timeout(LAMBDA_PROPOSER) #TODO : Decide the delays
 				
 				p_vals = list()
 				try:
-					for msg in self.input_buffer[(round_no, 0)]:
+					for msg in self.input_buffer[(round_no, step)]:
 						c_sign = msg[1]
 						encoded_msg = msg[0]
 						payload, pk, mid, nid, m_type, roundn, stepn = encoded_msg.decode('utf-8').split("<|>")
@@ -128,16 +143,57 @@ class Node:
 				least_p_val = min(p_vals)
 				
 				if hx == least_p_val:
-					bp_message_payload = str(prev_hsh) + "<@>" + str(random.getrandbits(32)) + "<@>" + gossip_body
-					bp_message_object = Message(self, bp_message_payload, 'b', round_no, 0)
+					rand_string = str(random.getrandbits(32))
+					proposed_block = Block(prev_block.hsh, rand_string, prev_block.height)
+					bp_message_payload = str(prev_hsh) + "<@>" + rand_string + "<@>" + gossip_body
+					bp_message_object = Message(self, bp_message_payload, 'b', round_no, step)
 					self.put(bp_message_object.message)
 					print("Block proposer selected", self.iden)
 
-					yield env.timeout(LAMBDA_PROPOSER + LAMBDA_BLOCK)
-					
-					hash_block = self.reduction(bp_message_object, round_no, prev_hsh)
-					print("After Reduction")
-			yield env.timeout(random.randint(6, 10)) #TODO : Decide the delays
+			if proposed_block == None:
+				#env.process(self.delay(env, LAMBDA_PROPOSER + LAMBDA_BLOCK))
+				yield env.timeout(LAMBDA_PROPOSER + LAMBDA_BLOCK)
+			else:
+				#env.process(self.delay(env, LAMBDA_BLOCK))
+				yield env.timeout(LAMBDA_BLOCK)
+
+			try:
+				for msg in self.input_buffer[(round_no, step)]:
+					c_sign = msg[1]
+					encoded_msg = msg[0]
+					payload, pk, mid, nid, m_type, roundn, stepn = encoded_msg.decode('utf-8').split("<|>")
+
+					if m_type == 'b' and proposed_block == None:
+						print("Block message recieved from " + str(nid) + " at node" + str(self.iden))
+						prev_hsh, rand_string, priority_payload = payload.split("<@>")
+						proposed_block = Block(prev_block.hsh, rand_string, prev_block.height)
+					else:
+						continue
+			except KeyError as e:
+				print("No matching keys", e)
+
+			if proposed_block == None:
+				proposed_block = Block(prev_block.hsh, "Empty", prev_block.height)
+
+			print("Starting Reduction on block " + proposed_block.s + " from node " + str(self.iden))
+			cur_block = yield env.process(self.reduction(proposed_block, round_no, prev_hsh))
+			print("After Reduction", self.iden)
+			final_block = yield env.process(self.binaryBA(round_no, cur_block, prev_hsh))
+			print("After BinaryBA", self.iden)
+			hash_block = self.count_votes(round_no, FINAL_STEP, T_FINAL, COMMITTEE_FINAL_FACTOR)
+			
+			#TODO final consensus logic
+			if final_block.hsh == hash_block:
+				final_block.state = "Final"
+			else:
+				final_block.state = "Tentative"
+
+			prev_block = final_block
+			print("Block consensus achieved", self.iden)
+			
+			print("new round for", self.iden)	
+			#env.process(self.delay(env, 30))
+			yield env.timeout(30) #TODO : Decide the delays
 
 	def put(self, value):
 		"""Broadcast a *value* to all receivers."""
@@ -175,37 +231,172 @@ class Node:
 
 	def reduction(self, block, round_no, prev_hsh):
 		print("Reduction called by: " + str(self.iden))
-		v_hash, v_j = self.sortition((prev_hsh, str(round_no), 0), T_PROPOSER, 'r')
+		v_hash, v_j = self.sortition((prev_hsh, round_no, 0), T_PROPOSER, 'r')
 		step = 1
-		self.committee_vote(prev_hsh, round_no, step, T_STEP, block, v_hash, v_j)	
+
+		print("Starting Committee Vote for Node " + str(self.iden) + " time: " + str(env.now))
+		self.committee_vote(prev_hsh, round_no, step, T_STEP, block, v_hash, v_j)
+		yield env.timeout(LAMBDA_STEP)
+		print("Ending Committee Vote for Node " + str(self.iden) + " time: " + str(env.now))
 		
-		#TODO hash_block = count_votes()
+		hash_block = self.count_votes(round_no, step, T_STEP, COMMITTEE_STEP_FACTOR)
 		
 		step = 2
 		empty_block = Block(prev_block.hsh, "Empty", prev_block.height)
 		
-		if hash_block == None:
+		if hash_block == None or hash_block != block.hsh:
 			self.committee_vote(prev_hsh, round_no, step, T_STEP, empty_block, v_hash, v_j)
+			yield env.timeout(LAMBDA_STEP)
 		else:
 			self.committee_vote(prev_hsh, round_no, step, T_STEP, hash_block, v_hash, v_j)
+			yield env.timeout(LAMBDA_STEP)
 		
-		#hash_block = count_votes()
+		hash_block = self.count_votes(round_no, step, T_STEP, COMMITTEE_STEP_FACTOR)
 		
-		if hash_block == None:
+		print("Exiting reduction")
+		if hash_block == None or hash_block != block.hsh:
 			return empty_block
 		else:
-			return hash_block
+			return block
 
 
 	def committee_vote(self, prev_hsh, round_no, step, threshold, block, v_hash, v_j):
-		hsh, j = self.sortition((prev_hsh, str(round_no), step), threshold, 'c')
+		print("Doing committee_vote for", self.iden)
+		hsh, j = self.sortition((prev_hsh, round_no, step), threshold, 'c')
 		if j > 0:
 			vote_body = str(prev_hsh) + "<$>" + str(block.hsh) + "<$>" + str(round_no) + "<$>"\
 			 + str(step) + "<$>" + str(v_j) + "<$>" + str(v_hash)
 			vote_msg = Message(self, vote_body, 'nb', round_no, step)
 			print("Voting for step: " + str(step))
 			self.put(vote_msg.message)
-		yield env.timeout(LAMBDA_STEP)
+		
+
+	def count_votes(self, round_no, step, threshold, committee_size_factor):
+		print("Doing count_vote for", self.iden)
+		try:
+			voters = list()
+			for msg in self.input_buffer[(round_no, step)]:
+				c_sign = msg[1]
+				encoded_msg = msg[0]
+				payload, pk, mid, nid, m_type, roundn, stepn = encoded_msg.decode('utf-8').split("<|>")
+				prev_hsh, cur_hsh, r_no, s_no, v_j, v_hash = payload.split("<$>")
+				
+				try:
+					pks[nid].verify(c_sign, encoded_msg)
+				except Exception as e:
+					print(e)
+					print("Error occured during Public Key verification.")
+					continue
+				
+				if prev_hsh != prev_block.hsh:
+					continue
+				
+				hsh,votes = self.sortition((prev_hsh, round_no, step), threshold, 'c')
+				
+				if pk in voters or votes == 0:
+					continue
+
+				voters.append(pk)
+
+				self.count_value[cur_hsh] = self.count_value.get(cur_hsh, 0) + votes
+
+				if self.count_value[cur_hsh] > committee_size_factor * threshold:
+					return cur_hsh
+
+			return None
+
+		except KeyError as e:
+			print("No matching keys", e)
+
+	def binaryBA(self, round_no, block, prev_hsh):
+		step = 3
+		cur_block = block
+		empty_block = Block(prev_block.hsh, "Empty", prev_block.height)
+		v_hash, v_j = self.sortition((prev_hsh, round_no, 0), T_PROPOSER, 'r')
+
+		while step < MAX_STEPS:
+			self.committee_vote(prev_hsh, round_no, step, T_STEP, cur_block, v_hash, v_j)
+			yield env.timeout(LAMBDA_STEP)
+			hash_block = self.count_votes(round_no, step, T_STEP, COMMITTEE_STEP_FACTOR)
+
+			if hash_block == None:
+				cur_block = block
+			elif hash_block != empty_block.hsh:
+				for s in range(step + 1, step + 4):
+					self.committee_vote(prev_hsh, round_no, s, T_STEP, cur_block, v_hash, v_j)
+					yield env.timeout(LAMBDA_STEP)
+				if step == 3:
+					self.committee_vote(prev_hsh, round_no, FINAL_STEP, T_FINAL, cur_block, v_hash, v_j)
+					yield env.timeout(LAMBDA_STEP)
+				return cur_block
+			step += 1
+
+			self.committee_vote(prev_hsh, round_no, step, T_STEP, cur_block, v_hash, v_j)
+			yield env.timeout(LAMBDA_STEP)
+			hash_block = self.count_votes(round_no, step, T_STEP, COMMITTEE_STEP_FACTOR)
+
+			if hash_block == None:
+				cur_block = empty_block
+			elif cur_block.hsh == empty_block.hsh:
+				for s in range(step + 1, step + 4):
+					self.committee_vote(prev_hsh, round_no, s, T_STEP, cur_block, v_hash, v_j)
+					yield env.timeout(LAMBDA_STEP)
+				return cur_block
+
+			step += 1
+
+			self.committee_vote(prev_hsh, round_no, step, T_STEP, cur_block, v_hash, v_j)
+			yield env.timeout(LAMBDA_STEP)
+			hash_block = self.count_votes(round_no, step, T_STEP, COMMITTEE_STEP_FACTOR)
+
+			if hash_block == None:
+				if self.common_coin(round_no, step, T_STEP) == 0:
+					cur_block = block
+				else:
+					cur_block = empty_block
+
+			step += 1
+
+		print("Inside BinaryBA, hanging forever...", self.iden)
+		while True:
+			continue
+
+	def common_coin(self, round_no, step, threshold):
+		min_hash = 1
+		votes = 0
+		try:
+			for msg in self.input_buffer[(round_no, step)]:
+				c_sign = msg[1]
+				encoded_msg = msg[0]
+				payload, pk, mid, nid, m_type, roundn, stepn = encoded_msg.decode('utf-8').split("<|>")
+				prev_hsh, cur_hsh, r_no, s_no, v_j, v_hash = payload.split("<$>")
+				
+				try:
+					pks[nid].verify(c_sign, encoded_msg)
+				except Exception as e:
+					print(e)
+					print("Error occured during Public Key verification.")
+					votes = 0
+				
+				if prev_hsh != prev_block.hsh:
+					votes = 0
+				
+				hsh,votes = self.sortition((prev_hsh, round_no, step), threshold, 'c')
+				
+				if votes > 0:
+					hash_string = str(hsh) + str(1)
+					min_hash = hashlib.sha256(hash_string.encode()).hexdigest()
+
+					for i in range(2, votes + 1):
+						hash_string = str(hsh) + str(i)
+						h = hashlib.sha256(hash_string.encode()).hexdigest()
+						min_hash = min(h, min_hash)
+
+		except KeyError as e:
+			print("No matching keys", e)
+
+		return min_hash % 2
+
 		
 class Link:
 	"""Link has a pipe local variable"""
@@ -244,6 +435,7 @@ class Block:
 		self.block = str(prev_hsh) + str(s)
 		self.hsh = hashlib.sha256(self.block.encode()).hexdigest()
 		self.height = prev_height + 1
+		self.state = None
 
 ### END OF CLASSES
 
@@ -320,8 +512,10 @@ for i in range(NODE_COUNT):
 # print("dm", delay_matrix)
 # print("bm", block_delay_matrix)
 gb = Block(None, "We are buildling the best Algorand Discrete Event Simulator", -1)
+gb.state = "Final"
 prev_block = gb  # to know the current leader block
 
+print("Genesis bock created: " + str(prev_block))
 # 3. create links
 for i in range(NODE_COUNT):
 	curr_node = nodes[i]

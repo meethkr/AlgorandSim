@@ -2,5 +2,6 @@
 Algorand simulator.
 ---
 CS 620 Project
-****Harikrishnan R
+
+*Harikrishnan R
 *Aman Jindal 

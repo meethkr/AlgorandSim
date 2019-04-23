@@ -16,8 +16,8 @@ COMMITTEE_STEP_FACTOR = 0.685
 COMMITTEE_FINAL_FACTOR = 0.74
 
 T_PROPOSER = 20
-T_STEP = 200
-T_FINAL = 200
+T_STEP = 20
+T_FINAL = 20
 
 LAMBDA_PROPOSER = 3 * 10000
 LAMBDA_BLOCK = 30 * 10000
@@ -71,14 +71,14 @@ class Node:
 				yield env.timeout(in_link.delay)
 
 			if ((mid, nid)) in self.recieved_id_cache:
-				print("Duplicate Message " + "recieved at node" + str(self.iden) + " from node  " \
-						+ str(in_link.src) + " with ID " + str(mid) + str(nid) \
-						+ " at " + str(env.now))
+				# print("Duplicate Message " + "recieved at node" + str(self.iden) + " from node  " \
+				# 		+ str(in_link.src) + " with ID " + str(mid) + str(nid) \
+				# 		+ " at " + str(env.now))
 				continue
 			else:
-				print("New Message " + "recieved at node"  + str(self.iden) + " from node  " +  \
-						str(in_link.src) + " with ID " + str(mid) + str(nid) \
-						+ " at " + str(env.now))
+				# print("New Message " + "recieved at node"  + str(self.iden) + " from node  " +  \
+				# 		str(in_link.src) + " with ID " + str(mid) + str(nid) \
+				# 		+ " at " + str(env.now))
 
 				self.recieved_id_cache.append((mid, nid))
 				self.input_buffer.setdefault((roundn, stepn), []).append(msg)
@@ -141,7 +141,9 @@ class Node:
 				except KeyError as e:
 					print("No matching keys", e)
 
-				least_p_val = min(p_vals)
+				if len(p_vals) != 0:
+					least_p_val = min(p_vals)
+				else: least_p_val = hx 
 
 				if hx == least_p_val:
 					rand_string = str(random.getrandbits(32))
@@ -195,7 +197,7 @@ class Node:
 				final_block.state = "Tentative"
 
 			prev_block = final_block
-			print("Block consensus achieved", self.iden)
+			print("Block consensus achieved, block string", self.iden, final_block.s)
 
 			print("new round for", self.iden)
 			#env.process(self.delay(env, 30))
@@ -212,7 +214,7 @@ class Node:
 		return self.env.all_of(events)  # Condition event for all "events"
 
 	def sortition(self, s, thold, role):
-		# print("sortition called at", self.iden)
+		#print("sortition called at", self.iden)
 		hsh = PRG(s)
 		p = thold / W_total_stake
 		j = 0
@@ -222,6 +224,9 @@ class Node:
 		x = (hsh / (2 ** 256))
 		#print('x', x)
 		#print('lower, higher', lower, higher)
+		#if x < lower then return j as 0
+		if x < lower:
+			return (hsh, j)
 		while x < lower or x >= higher:
 			j += 1
 			lower = 0
@@ -230,9 +235,9 @@ class Node:
 			for k in range(0, j+1):
 				lower += scipy.stats.binom.pmf(k, self.stake, p)
 
-			higher = lower + scipy.stats.binom.pmf(k, self.stake, p)
-			#print('lower, higher', lower, higher)
-		print("Sortition called by Node " + str(self.iden) + " returned sub user count " + str(j))
+			higher = lower + scipy.stats.binom.pmf(k+1, self.stake, p)
+			#print('lower, higher, j', lower, higher, j)
+		#print("Sortition called by Node " + str(self.iden) + " returned sub user count " + str(j))
 		return (hsh, j)
 
 	def reduction(self, block, round_no, prev_hsh):
@@ -265,7 +270,7 @@ class Node:
 
 
 	def committee_vote(self, prev_hsh, round_no, step, threshold, block, v_hash, v_j):
-		print("Doing committee_vote for", self.iden)
+		#print("Doing committee_vote for", self.iden)
 		hsh, j = self.sortition((prev_hsh, round_no, step), threshold, 'c')
 		if j > 0:
 			vote_body = str(prev_hsh) + "<$>" + str(block.hsh) + "<$>" + str(round_no) + "<$>"\
@@ -277,7 +282,7 @@ class Node:
 
 
 	def count_votes(self, round_no, step, threshold, committee_size_factor):
-		print("Doing count_vote for", self.iden)
+		#print("Doing count_vote for", self.iden)
 		try:
 			voters = list()
 			for msg in self.input_buffer[(round_no, step)]:
@@ -368,7 +373,7 @@ class Node:
 			continue
 
 	def common_coin(self, round_no, step, threshold):
-		min_hash = 1
+		min_hash = str(1)
 		votes = 0
 		try:
 			for msg in self.input_buffer[(round_no, step)]:
@@ -392,17 +397,18 @@ class Node:
 
 				if votes > 0:
 					hash_string = str(hsh) + str(1)
-					min_hash = hashlib.sha256(hash_string.encode()).hexdigest()
+					min_hash = str(hashlib.sha256(hash_string.encode()).hexdigest())
 
 					for i in range(2, votes + 1):
 						hash_string = str(hsh) + str(i)
-						h = hashlib.sha256(hash_string.encode()).hexdigest()
+						h = str(hashlib.sha256(hash_string.encode()).hexdigest())
 						min_hash = min(h, min_hash)
 
 		except KeyError as e:
 			print("No matching keys", e)
 
-		return min_hash % 2
+		print("Common Coin: ", min_hash)
+		return int(min_hash, 16) % 2
 
 
 class Link:

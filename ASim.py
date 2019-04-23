@@ -1,6 +1,7 @@
 import simpy
 import scipy.stats
-import ecdsa
+# import ecdsa
+from fastecdsa import keys, curve, ecdsa
 import numpy as np
 import random
 import hashlib
@@ -12,7 +13,7 @@ MIN_DEG = 2
 MAX_DEG = 3
 
 COMMITTEE_STEP_FACTOR = 0.685
-COMMITTEE_FINAL_FACTOR = 0.74 
+COMMITTEE_FINAL_FACTOR = 0.74
 
 T_PROPOSER = 20
 T_STEP = 200
@@ -42,8 +43,7 @@ class Node:
 
 		self.stake = np.random.randint(1, 51)
 
-		self.sk = ecdsa.SigningKey.generate()
-		self.pk = self.sk.get_verifying_key()
+		self.sk, self.pk = keys.gen_keypair(curve.P256)
 
 		self.input_buffer = dict()
 		self.count_value = dict()
@@ -57,8 +57,8 @@ class Node:
 		while True:
 			msg = yield in_link.pipe.get()
 			c_sign = msg[1]
-			encoded_msg = msg[0]
-			payload, pk, mid, nid, m_type, roundn, stepn = encoded_msg.decode('utf-8').split("<|>")
+			decoded_msg = msg[0]
+			payload, pk, mid, nid, m_type, roundn, stepn = decoded_msg.split("<|>")
 			nid = int(nid)
 			mid = int(mid)
 			roundn = int(roundn)
@@ -85,10 +85,10 @@ class Node:
 				self.recieved_id_cache.append((mid, nid))
 				self.input_buffer.setdefault((roundn, stepn), []).append(msg)
 				#print("input buffer at node", self.iden, ":", self.input_buffer)
-				try:
-					pks[nid].verify(c_sign, encoded_msg)
-				except Exception as e:
-					print(e)
+
+				if ecdsa.verify(c_sign, decoded_msg, pks[nid]):
+					print("Key verification successful")
+				else:
 					print("Error occured during Public Key verification.")
 					continue
 
@@ -101,7 +101,7 @@ class Node:
 		return link
 
 	def message_generator(self, env):
-		while True:	
+		while True:
 			self.input_buffer = dict()
 			self.count_value = dict()
 			print("generator called at", self.iden)
@@ -125,23 +125,23 @@ class Node:
 				gossip_body = str(round_no) + "<$>" + str(hsh) + "<$>" + str(j) + "<$>" + str(hx)
 				gossip_msg = Message(self, gossip_body, 'nb', round_no, step)
 				self.put(gossip_msg.message)
-				
+
 				#env.process(self.delay(env, LAMBDA_PROPOSER))
 				yield env.timeout(LAMBDA_PROPOSER) #TODO : Decide the delays
-				
+
 				p_vals = list()
 				try:
 					for msg in self.input_buffer[(round_no, step)]:
 						c_sign = msg[1]
-						encoded_msg = msg[0]
-						payload, pk, mid, nid, m_type, roundn, stepn = encoded_msg.decode('utf-8').split("<|>")
+						decoded_msg = msg[0]
+						payload, pk, mid, nid, m_type, roundn, stepn = decoded_msg.split("<|>")
 						rn, hs, subuser_no, priority = payload.split("<$>")
 						p_vals.append(priority)
 				except KeyError as e:
 					print("No matching keys", e)
-				
+
 				least_p_val = min(p_vals)
-				
+
 				if hx == least_p_val:
 					rand_string = str(random.getrandbits(32))
 					proposed_block = Block(prev_block.hsh, rand_string, prev_block.height)
@@ -160,8 +160,8 @@ class Node:
 			try:
 				for msg in self.input_buffer[(round_no, step)]:
 					c_sign = msg[1]
-					encoded_msg = msg[0]
-					payload, pk, mid, nid, m_type, roundn, stepn = encoded_msg.decode('utf-8').split("<|>")
+					decoded_msg = msg[0]
+					payload, pk, mid, nid, m_type, roundn, stepn = decoded_msg.split("<|>")
 
 					if m_type == 'b' and proposed_block == None:
 						print("Block message recieved from " + str(nid) + " at node" + str(self.iden))
@@ -181,7 +181,7 @@ class Node:
 			final_block = yield env.process(self.binaryBA(round_no, cur_block, prev_hsh))
 			print("After BinaryBA", self.iden)
 			hash_block = self.count_votes(round_no, FINAL_STEP, T_FINAL, COMMITTEE_FINAL_FACTOR)
-			
+
 			#TODO final consensus logic
 			if final_block.hsh == hash_block:
 				final_block.state = "Final"
@@ -190,8 +190,8 @@ class Node:
 
 			prev_block = final_block
 			print("Block consensus achieved", self.iden)
-			
-			print("new round for", self.iden)	
+
+			print("new round for", self.iden)
 			#env.process(self.delay(env, 30))
 			yield env.timeout(30) #TODO : Decide the delays
 
@@ -238,21 +238,21 @@ class Node:
 		self.committee_vote(prev_hsh, round_no, step, T_STEP, block, v_hash, v_j)
 		yield env.timeout(LAMBDA_STEP)
 		print("Ending Committee Vote for Node " + str(self.iden) + " time: " + str(env.now))
-		
+
 		hash_block = self.count_votes(round_no, step, T_STEP, COMMITTEE_STEP_FACTOR)
-		
+
 		step = 2
 		empty_block = Block(prev_block.hsh, "Empty", prev_block.height)
-		
+
 		if hash_block == None or hash_block != block.hsh:
 			self.committee_vote(prev_hsh, round_no, step, T_STEP, empty_block, v_hash, v_j)
 			yield env.timeout(LAMBDA_STEP)
 		else:
 			self.committee_vote(prev_hsh, round_no, step, T_STEP, hash_block, v_hash, v_j)
 			yield env.timeout(LAMBDA_STEP)
-		
+
 		hash_block = self.count_votes(round_no, step, T_STEP, COMMITTEE_STEP_FACTOR)
-		
+
 		print("Exiting reduction")
 		if hash_block == None or hash_block != block.hsh:
 			return empty_block
@@ -269,7 +269,7 @@ class Node:
 			vote_msg = Message(self, vote_body, 'nb', round_no, step)
 			print("Voting for step: " + str(step))
 			self.put(vote_msg.message)
-		
+
 
 	def count_votes(self, round_no, step, threshold, committee_size_factor):
 		print("Doing count_vote for", self.iden)
@@ -277,22 +277,21 @@ class Node:
 			voters = list()
 			for msg in self.input_buffer[(round_no, step)]:
 				c_sign = msg[1]
-				encoded_msg = msg[0]
-				payload, pk, mid, nid, m_type, roundn, stepn = encoded_msg.decode('utf-8').split("<|>")
+				decoded_msg = msg[0]
+				payload, pk, mid, nid, m_type, roundn, stepn = decoded_msg.split("<|>")
 				prev_hsh, cur_hsh, r_no, s_no, v_j, v_hash = payload.split("<$>")
-				
-				try:
-					pks[nid].verify(c_sign, encoded_msg)
-				except Exception as e:
-					print(e)
+
+				if ecdsa.verify(c_sign, decoded_msg, pks[nid]):
+					print("Key verification successful")
+				else:
 					print("Error occured during Public Key verification.")
 					continue
-				
+
 				if prev_hsh != prev_block.hsh:
 					continue
-				
+
 				hsh,votes = self.sortition((prev_hsh, round_no, step), threshold, 'c')
-				
+
 				if pk in voters or votes == 0:
 					continue
 
@@ -367,22 +366,21 @@ class Node:
 		try:
 			for msg in self.input_buffer[(round_no, step)]:
 				c_sign = msg[1]
-				encoded_msg = msg[0]
-				payload, pk, mid, nid, m_type, roundn, stepn = encoded_msg.decode('utf-8').split("<|>")
+				decoded_msg = msg[0]
+				payload, pk, mid, nid, m_type, roundn, stepn = decoded_msg.split("<|>")
 				prev_hsh, cur_hsh, r_no, s_no, v_j, v_hash = payload.split("<$>")
-				
-				try:
-					pks[nid].verify(c_sign, encoded_msg)
-				except Exception as e:
-					print(e)
+
+				if ecdsa.verify(c_sign, decoded_msg, pks[nid]):
+					print("Key verification successful")
+				else:
 					print("Error occured during Public Key verification.")
 					votes = 0
-				
+
 				if prev_hsh != prev_block.hsh:
 					votes = 0
-				
+
 				hsh,votes = self.sortition((prev_hsh, round_no, step), threshold, 'c')
-				
+
 				if votes > 0:
 					hash_string = str(hsh) + str(1)
 					min_hash = hashlib.sha256(hash_string.encode()).hexdigest()
@@ -397,7 +395,7 @@ class Node:
 
 		return min_hash % 2
 
-		
+
 class Link:
 	"""Link has a pipe local variable"""
 	def __init__(self, env,  src, dest, delay, block_delay, capacity = simpy.core.Infinity):
@@ -422,9 +420,9 @@ class Message:
 		node.message_sequence_id += 1
 		self.publickey = node.pk
 
-		self.message_string = (str(self.payload) + "<|>" + str(self.publickey) + "<|>" +\
-				str(self.msg_id) + "<|>" + str(self.node_id) + "<|>" + str(self.m_type) + "<|>" + str(roundn) + "<|>" + str(stepn)).encode('utf-8')
-		self.signature = node.sk.sign(self.message_string)
+		self.message_string = str(self.payload) + "<|>" + str(self.publickey) + "<|>" +\
+				str(self.msg_id) + "<|>" + str(self.node_id) + "<|>" + str(self.m_type) + "<|>" + str(roundn) + "<|>" + str(stepn)
+		self.signature = ecdsa.sign(self.message_string, node.sk)
 
 		self.message = (self.message_string, self.signature)
 

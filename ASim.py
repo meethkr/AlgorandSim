@@ -19,9 +19,9 @@ T_PROPOSER = NODE_COUNT * 0.01
 T_STEP = NODE_COUNT * 0.1
 T_FINAL = NODE_COUNT * 0.01
 
-LAMBDA_PROPOSER = 3 * 10000
-LAMBDA_BLOCK = 30 * 10000
-LAMBDA_STEP = 3 * 10000
+LAMBDA_PROPOSER = 3 * 1000
+LAMBDA_BLOCK = 30 * 1000
+LAMBDA_STEP = 3 * 1000
 
 MAX_STEPS = 15
 FINAL_STEP = MAX_STEPS + 1
@@ -394,9 +394,7 @@ class Node:
 
             step += 1
 
-        print("Inside BinaryBA, hanging forever...", self.iden)
-        while True:
-            continue
+        return cur_block
 
     def common_coin(self, round_no, step, threshold):
         min_hash = str(1)

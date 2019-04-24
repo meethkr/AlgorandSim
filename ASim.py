@@ -8,15 +8,15 @@ import hashlib
 
 
 ### PARAMETERS
-NODE_COUNT = 4
-MIN_DEG = 2
-MAX_DEG = 3
+NODE_COUNT = 2000
+MIN_DEG = 4
+MAX_DEG = 8
 
 COMMITTEE_STEP_FACTOR = 0.685
 COMMITTEE_FINAL_FACTOR = 0.74
 
 T_PROPOSER = 20
-T_STEP = 20
+T_STEP = 200
 T_FINAL = 20
 
 LAMBDA_PROPOSER = 3 * 10000
@@ -82,12 +82,12 @@ class Node:
 
 				self.recieved_id_cache.append((mid, nid))
 				self.input_buffer.setdefault((roundn, stepn), []).append(msg)
-				#print("input buffer at node", self.iden, ":", self.input_buffer)
+				#print("input buffer at node", self.iden, ":", len(self.input_buffer[(roundn, stepn)]), " round:", roundn, " step: ", stepn)
 
 				nid = int(nid)
 				if ecdsa.verify(c_sign, decoded_msg, pks[nid]):
 					pass
-					#print("Key verification successful")
+					#print("Key verification successful for", self.iden)
 				else:
 					print("Error occured during Public Key verification.")
 					continue
@@ -101,10 +101,10 @@ class Node:
 		return link
 
 	def message_generator(self, env):
-		while True:
-			self.input_buffer = dict()
-			self.count_value = dict()
-			print("generator called at", self.iden)
+		#while True:2000
+			#self.input_buffer = dict()
+			#self.count_value = dict()
+			#print("generator called at", self.iden)
 			step = 0
 			global prev_block
 			round_no = prev_block.height
@@ -113,7 +113,7 @@ class Node:
 
 			proposed_block = None
 			if j > 0:
-				#print("found a guy", self.iden)
+				print("found a guy", self.iden)
 				hx = hashlib.sha256((str(hsh) + str(1)).encode()).hexdigest() #priority
 				jx = 1          #corresponding id
 				for i in range(2, j+1):
@@ -129,8 +129,10 @@ class Node:
 
 				#env.process(self.delay(env, LAMBDA_PROPOSER))
 				yield env.timeout(LAMBDA_PROPOSER) #TODO : Decide the delays
-
+				#yield env.timeout(10000)
+				#print("After Gossiping block proposal messages ", self.iden)
 				p_vals = list()
+				p_vals.append(str(hx))
 				try:
 					for msg in self.input_buffer[(round_no, step)]:
 						c_sign = msg[1]
@@ -139,13 +141,16 @@ class Node:
 						rn, hs, subuser_no, priority = payload.split("<$>")
 						p_vals.append(priority)
 				except KeyError as e:
-					print("No matching keys", e)
+					print("No matching keys", e, " buffer:", self.input_buffer)
 
 				if len(p_vals) != 0:
 					least_p_val = min(p_vals)
-				else: least_p_val = hx 
+				else: 
+					least_p_val = hx 
 
+				# print("After priority detection ", self.iden, " least", least_p_val, " mine", hx)
 				if hx == least_p_val:
+					#print("After priority detection ", self.iden, " least", least_p_val, " mine", hx)
 					rand_string = str(random.getrandbits(32))
 					proposed_block = Block(prev_block.hsh, rand_string, prev_block.height)
 					bp_message_payload = str(prev_hsh) + "<@>" + rand_string + "<@>" + gossip_body
@@ -155,15 +160,13 @@ class Node:
 					print("Block proposer selected", self.iden)
 
 			if proposed_block == None:
-				#env.process(self.delay(env, LAMBDA_PROPOSER + LAMBDA_BLOCK))
 				yield env.timeout(LAMBDA_PROPOSER + LAMBDA_BLOCK)
 			else:
-				#env.process(self.delay(env, LAMBDA_BLOCK))
 				yield env.timeout(LAMBDA_BLOCK)
 		
-			print("Before Before Before Before Node: " + str(self.iden) + " Time: " + str(env.now))
-			yield env.timeout(10000)
-			print("After After After After Node: " + str(self.iden) + " Time: " + str(env.now))
+			#print("Before Before Before Before Node: " + str(self.iden) + " Time: " + str(env.now))
+			#yield env.timeout(10000)
+			#print("After After After After Node: " + str(self.iden) + " Time: " + str(env.now))
 
 			try:
 				for msg in self.input_buffer[(round_no, step)]:
@@ -178,31 +181,31 @@ class Node:
 					else:
 						continue
 			except KeyError as e:
-				print("No matching keys", e)
+				print("No matching keys", e, " buffer:", self.input_buffer)
 
 			if proposed_block == None:
 				proposed_block = Block(prev_block.hsh, "Empty", prev_block.height)
 
-			print("Starting Reduction on block " + proposed_block.s + " from node " + str(self.iden))
-			cur_block = yield env.process(self.reduction(proposed_block, round_no, prev_hsh))
-			#print("After Reduction", self.iden)
-			final_block = yield env.process(self.binaryBA(round_no, cur_block, prev_hsh))
-			#print("After BinaryBA", self.iden)
-			hash_block = self.count_votes(round_no, FINAL_STEP, T_FINAL, COMMITTEE_FINAL_FACTOR)
+			#print("Starting Reduction on block " + proposed_block.s + " from node " + str(self.iden))
+			# cur_block = yield env.process(self.reduction(proposed_block, round_no, prev_hsh))
+			# #print("After Reduction", self.iden)
+			# final_block = yield env.process(self.binaryBA(round_no, cur_block, prev_hsh))
+			# #print("After BinaryBA", self.iden)
+			# hash_block = self.count_votes(round_no, FINAL_STEP, T_FINAL, COMMITTEE_FINAL_FACTOR)
 
-			#TODO final consensus logic
-			if final_block.hsh == hash_block:
-				final_block.state = "Final"
-			else:
-				final_block.state = "Tentative"
+			# #TODO final consensus logic
+			# if final_block.hsh == hash_block:
+			# 	final_block.state = "Final"
+			# else:
+			# 	final_block.state = "Tentative"
 
-			prev_block = final_block
-			print("Block consensus achieved, block string", self.iden, final_block.s)
+			# prev_block = final_block
+			# print("Block consensus achieved, block string", self.iden, final_block.s)
 
-			print("new round for", self.iden)
+			#print("new round for", self.iden)
 			#env.process(self.delay(env, 30))
 			yield env.timeout(30) #TODO : Decide the delays
-
+		#	input()
 	def put(self, value):
 		"""Broadcast a *value* to all receivers."""
 		if not self.out_links:
@@ -215,29 +218,33 @@ class Node:
 
 	def sortition(self, s, thold, role):
 		#print("sortition called at", self.iden)
-		hsh = PRG(s)
+		hsh = PRG(s, self.sk)
+		hsh_length = hsh.bit_length()
 		p = thold / W_total_stake
 		j = 0
 		k = 0
-		lower = scipy.stats.binom.pmf(k, self.stake, p)
-		higher = lower + scipy.stats.binom.pmf(k + 1, self.stake, p)
+		lower = 0
+		higher = lower + scipy.stats.binom.pmf(k, self.stake, p)
 		x = (hsh / (2 ** 256))
 		#print('x', x)
-		#print('lower, higher', lower, higher)
+		#print('lower, higher, p', lower, higher, p)
 		#if x < lower then return j as 0
-		if x < lower:
-			return (hsh, j)
-		while x < lower or x >= higher:
+		#if x < lower:
+		#	print("Sortition called by Node " + str(self.iden) + " returned sub user count " + str(j))
+		#	return (hsh, j)
+		while (x < lower or x >= higher) and j <= self.stake:
 			j += 1
 			lower = 0
 			higher = 0
 
-			for k in range(0, j+1):
+			for k in range(0, j):
 				lower += scipy.stats.binom.pmf(k, self.stake, p)
 
 			higher = lower + scipy.stats.binom.pmf(k+1, self.stake, p)
 			#print('lower, higher, j', lower, higher, j)
-		#print("Sortition called by Node " + str(self.iden) + " returned sub user count " + str(j))
+
+		if j > 0:
+			print("Sortition selected Node " + str(self.iden) + " returned sub user count " + str(j))
 		return (hsh, j)
 
 	def reduction(self, block, round_no, prev_hsh):
@@ -262,7 +269,7 @@ class Node:
 
 		hash_block = self.count_votes(round_no, step, T_STEP, COMMITTEE_STEP_FACTOR)
 
-		print("Exiting reduction")
+		#print("Exiting reduction")
 		if hash_block == None or hash_block != block.hsh:
 			return empty_block
 		else:
@@ -276,7 +283,7 @@ class Node:
 			vote_body = str(prev_hsh) + "<$>" + str(block.hsh) + "<$>" + str(round_no) + "<$>"\
 			 + str(step) + "<$>" + str(v_j) + "<$>" + str(v_hash)
 			vote_msg = Message(self, vote_body, 'nb', round_no, step)
-			print("Voting for step: " + str(step))
+			#print("Voting for step: " + str(step))
 			self.recieved_id_cache.append((vote_msg.msg_id, vote_msg.node_id))		
 			self.put(vote_msg.message)
 
@@ -407,7 +414,7 @@ class Node:
 		except KeyError as e:
 			print("No matching keys", e)
 
-		print("Common Coin: ", min_hash)
+		#print("Common Coin: ", min_hash)
 		return int(min_hash, 16) % 2
 
 
@@ -453,8 +460,8 @@ class Block:
 ### END OF CLASSES
 
 ## PUBLIC FUNCTIONS
-def PRG(s):
-	random.seed(str(s))
+def PRG(s, sk):
+	random.seed(ecdsa.sign(str(s), sk))
 	return random.getrandbits(256)
 
 
@@ -528,7 +535,7 @@ gb = Block(None, "We are buildling the best Algorand Discrete Event Simulator", 
 gb.state = "Final"
 prev_block = gb  # to know the current leader block
 
-print("Genesis bock created: " + str(prev_block))
+#print("Genesis bock created: " + str(prev_block))
 # 3. create links
 for i in range(NODE_COUNT):
 	curr_node = nodes[i]

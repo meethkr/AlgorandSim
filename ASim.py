@@ -85,12 +85,12 @@ class Node:
                 #print("input buffer at node", self.iden, ":", len(self.input_buffer[(roundn, stepn)]), " round:", roundn, " step: ", stepn)
 
                 nid = int(nid)
-                if ecdsa.verify(c_sign, decoded_msg, pks[nid]):
-                    pass
-                    #print("Key verification successful for", self.iden)
-                else:
-                    print("Error occured during Public Key verification.")
-                    continue
+                # if ecdsa.verify(c_sign, decoded_msg, pks[nid]):
+                #     pass
+                #     #print("Key verification successful for", self.iden)
+                # else:
+                #     print("Error occured during Public Key verification.")
+                #     continue
 
                 self.put(msg)
 
@@ -299,12 +299,12 @@ class Node:
                 prev_hsh, cur_hsh, r_no, s_no, v_j, v_hash = payload.split("<$>")
 
                 nid = int(nid)
-                if ecdsa.verify(c_sign, decoded_msg, pks[nid]):
-                    pass
-                    #print("Key verification successful")
-                else:
-                    print("Error occured during Public Key verification.")
-                    continue
+                # if ecdsa.verify(c_sign, decoded_msg, pks[nid]):
+                #     pass
+                #     #print("Key verification successful")
+                # else:
+                #     print("Error occured during Public Key verification.")
+                #     continue
 
                 if prev_hsh != prev_block.hsh:
                     continue
@@ -390,12 +390,12 @@ class Node:
                 prev_hsh, cur_hsh, r_no, s_no, v_j, v_hash = payload.split("<$>")
 
                 nid = int(nid)
-                if ecdsa.verify(c_sign, decoded_msg, pks[nid]):
-                    pass
-                    #print("Key verification successful")
-                else:
-                    print("Error occured during Public Key verification.")
-                    votes = 0
+                # if ecdsa.verify(c_sign, decoded_msg, pks[nid]):
+                #     pass
+                #     #print("Key verification successful")
+                # else:
+                #     print("Error occured during Public Key verification.")
+                #     votes = 0
 
                 if prev_hsh != prev_block.hsh:
                     votes = 0

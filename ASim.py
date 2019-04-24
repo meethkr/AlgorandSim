@@ -15,9 +15,9 @@ MAX_DEG = 8
 COMMITTEE_STEP_FACTOR = 0.685
 COMMITTEE_FINAL_FACTOR = 0.74
 
-T_PROPOSER = 20
-T_STEP = 200
-T_FINAL = 20
+T_PROPOSER = NODE_COUNT * 0.01 
+T_STEP = NODE_COUNT * 0.1
+T_FINAL = NODE_COUNT * 0.01
 
 LAMBDA_PROPOSER = 3 * 10000
 LAMBDA_BLOCK = 30 * 10000
@@ -84,13 +84,13 @@ class Node:
                 self.input_buffer.setdefault((roundn, stepn), []).append(msg)
                 #print("input buffer at node", self.iden, ":", len(self.input_buffer[(roundn, stepn)]), " round:", roundn, " step: ", stepn)
 
-                nid = int(nid)
-                # if ecdsa.verify(c_sign, decoded_msg, pks[nid]):
-                #     pass
-                #     #print("Key verification successful for", self.iden)
-                # else:
-                #     print("Error occured during Public Key verification.")
-                #     continue
+                #nid = int(nid)
+                #if ecdsa.verify(c_sign, decoded_msg, pks[nid]):
+                #    pass
+                    #print("Key verification successful for", self.iden)
+                #else:
+                #    print("Error occured during Public Key verification.")
+                #    continue
 
                 self.put(msg)
 
@@ -157,7 +157,7 @@ class Node:
                     bp_message_object = Message(self, bp_message_payload, 'b', round_no, step)
                     self.recieved_id_cache.append((bp_message_object.msg_id, bp_message_object.node_id))
                     self.put(bp_message_object.message)
-                    print("Block proposer selected", self.iden)
+                    #print("Block proposer selected", self.iden)
 
             if proposed_block == None:
                 yield env.timeout(LAMBDA_PROPOSER + LAMBDA_BLOCK)
@@ -175,7 +175,7 @@ class Node:
                     payload, pk, mid, nid, m_type, roundn, stepn = decoded_msg.split("<|>")
 
                     if m_type == 'b' and proposed_block == None:
-                        print("Block message recieved from " + str(nid) + " at node" + str(self.iden))
+                        #print("Block message recieved from " + str(nid) + " at node" + str(self.iden))
                         prev_hsh, rand_string, priority_payload = payload.split("<@>")
                         proposed_block = Block(prev_block.hsh, rand_string, prev_block.height)
                     else:
@@ -185,25 +185,28 @@ class Node:
 
             if proposed_block == None:
                 proposed_block = Block(prev_block.hsh, "Empty", prev_block.height)
+            
+            #yield env.timeout(10000)
+            
+            print("Starting Reduction on block " + proposed_block.s + " from node " + str(self.iden))
+            cur_block = yield env.process(self.reduction(proposed_block, round_no, prev_hsh))
+            print("Starting BinaryBA", self.iden)
+            final_block = yield env.process(self.binaryBA(round_no, cur_block, prev_hsh))
+            print("Counting Fina Votes", self.iden)
+            hash_block = self.count_votes(round_no, FINAL_STEP, T_FINAL, COMMITTEE_FINAL_FACTOR)
 
-            #print("Starting Reduction on block " + proposed_block.s + " from node " + str(self.iden))
-            # cur_block = yield env.process(self.reduction(proposed_block, round_no, prev_hsh))
-            # #print("After Reduction", self.iden)
-            # final_block = yield env.process(self.binaryBA(round_no, cur_block, prev_hsh))
-            # #print("After BinaryBA", self.iden)
-            # hash_block = self.count_votes(round_no, FINAL_STEP, T_FINAL, COMMITTEE_FINAL_FACTOR)
-
-            # #TODO final consensus logic
-            # if final_block.hsh == hash_block:
-            #   final_block.state = "Final"
-            # else:
-            #   final_block.state = "Tentative"
+            # # #TODO final consensus logic
+            if final_block.hsh == hash_block:
+                print("Final concensus achived on block at Node", self.iden)
+                final_block.state = "Final"
+            else:
+                print("Tentative concensus achived on block at Node", self.iden)
+                final_block.state = "Tentative"
 
             # prev_block = final_block
             # print("Block consensus achieved, block string", self.iden, final_block.s)
 
             #print("new round for", self.iden)
-            #env.process(self.delay(env, 30))
             yield env.timeout(30) #TODO : Decide the delays
         #   input()
     def put(self, value):
@@ -243,8 +246,8 @@ class Node:
             higher = lower + scipy.stats.binom.pmf(k+1, self.stake, p)
             #print('lower, higher, j', lower, higher, j)
 
-        if j > 0:
-            print("Sortition selected Node " + str(self.iden) + " returned sub user count " + str(j))
+        #if j > 0:
+            #print("Sortition selected Node " + str(self.iden) + " returned sub user count " + str(j))
         return (hsh, j)
 
     def reduction(self, block, round_no, prev_hsh):
@@ -264,24 +267,26 @@ class Node:
             self.committee_vote(prev_hsh, round_no, step, T_STEP, empty_block, v_hash, v_j)
             yield env.timeout(LAMBDA_STEP)
         else:
-            self.committee_vote(prev_hsh, round_no, step, T_STEP, hash_block, v_hash, v_j)
+            self.committee_vote(prev_hsh, round_no, step, T_STEP, block, v_hash, v_j)
             yield env.timeout(LAMBDA_STEP)
 
         hash_block = self.count_votes(round_no, step, T_STEP, COMMITTEE_STEP_FACTOR)
 
         #print("Exiting reduction")
         if hash_block == None or hash_block != block.hsh:
+            #print("Returning empty block from reduction at Node", self.iden)
             return empty_block
         else:
+            #print("Returning new block from reduction at Node", self.iden)
             return block
 
 
     def committee_vote(self, prev_hsh, round_no, step, threshold, block, v_hash, v_j):
-        #print("Doing committee_vote for", self.iden)
+        #print("Doing committee_vote for", self.iden, " at round", round_no, " and", step)
         hsh, j = self.sortition((prev_hsh, round_no, step), threshold, 'c')
         if j > 0:
             vote_body = str(prev_hsh) + "<$>" + str(block.hsh) + "<$>" + str(round_no) + "<$>"\
-             + str(step) + "<$>" + str(v_j) + "<$>" + str(v_hash)
+             + str(step) + "<$>" + str(j) + "<$>" + str(hsh)
             vote_msg = Message(self, vote_body, 'nb', round_no, step)
             #print("Voting for step: " + str(step))
             self.recieved_id_cache.append((vote_msg.msg_id, vote_msg.node_id))      
@@ -299,6 +304,8 @@ class Node:
                 prev_hsh, cur_hsh, r_no, s_no, v_j, v_hash = payload.split("<$>")
 
                 nid = int(nid)
+                r_no = int(r_no)
+                s_no = int(s_no)
                 # if ecdsa.verify(c_sign, decoded_msg, pks[nid]):
                 #     pass
                 #     #print("Key verification successful")
@@ -309,7 +316,16 @@ class Node:
                 if prev_hsh != prev_block.hsh:
                     continue
 
-                hsh,votes = self.sortition((prev_hsh, round_no, step), threshold, 'c')
+                hsh,votes = nodes[nid].sortition((prev_hsh, r_no, s_no), threshold, 'c')
+
+                # if hsh == v_hash and votes == v_j:
+                #     print("VERIFIED COUNT VOTE SORTITION for ", nid)
+                # else:
+                #     print("NOT VERIFIED COUNT VOTE SORTITION for ", nid)
+                #     print("Original hash", v_hash)
+                #     print("New hash", hsh)
+                #     print("Original j", v_j)
+                #     print("New j", votes)
 
                 if pk in voters or votes == 0:
                     continue
@@ -319,12 +335,13 @@ class Node:
                 self.count_value[cur_hsh] = self.count_value.get(cur_hsh, 0) + votes
 
                 if self.count_value[cur_hsh] > committee_size_factor * threshold:
+                    #print("Vote above threshold achieved at Node", self.iden)
                     return cur_hsh
 
             return None
 
         except KeyError as e:
-            print("No matching keys", e)
+            print("No matching keys", e, " for node", self.iden)
 
     def binaryBA(self, round_no, block, prev_hsh):
         step = 3
@@ -346,6 +363,7 @@ class Node:
                 if step == 3:
                     self.committee_vote(prev_hsh, round_no, FINAL_STEP, T_FINAL, cur_block, v_hash, v_j)
                     yield env.timeout(LAMBDA_STEP)
+                #print("Returning block from BinaryBA from Node", self.iden, " as ", cur_block.s)
                 return cur_block
             step += 1
 
@@ -359,6 +377,7 @@ class Node:
                 for s in range(step + 1, step + 4):
                     self.committee_vote(prev_hsh, round_no, s, T_STEP, cur_block, v_hash, v_j)
                     yield env.timeout(LAMBDA_STEP)
+                #print("Returning block from BinaryBA from Node", self.iden, " as ", cur_block.s)
                 return cur_block
 
             step += 1
@@ -389,7 +408,7 @@ class Node:
                 payload, pk, mid, nid, m_type, roundn, stepn = decoded_msg.split("<|>")
                 prev_hsh, cur_hsh, r_no, s_no, v_j, v_hash = payload.split("<$>")
 
-                nid = int(nid)
+                # nid = int(nid)
                 # if ecdsa.verify(c_sign, decoded_msg, pks[nid]):
                 #     pass
                 #     #print("Key verification successful")
@@ -412,7 +431,7 @@ class Node:
                         min_hash = min(h, min_hash)
 
         except KeyError as e:
-            print("No matching keys", e)
+            print("No matching keys", e, " for node", self.iden)
 
         #print("Common Coin: ", min_hash)
         return int(min_hash, 16) % 2
@@ -528,7 +547,7 @@ for i in range(NODE_COUNT):
             block_delay_matrix[i].append(y)
             block_delay_matrix[j].append(y)
 
-print("m", node_conn_matrix)
+#print("m", node_conn_matrix)
 # print("dm", delay_matrix)
 # print("bm", block_delay_matrix)
 gb = Block(None, "We are buildling the best Algorand Discrete Event Simulator", -1)

@@ -5,6 +5,7 @@ from fastecdsa import keys, curve, ecdsa
 import numpy as np
 import random
 import hashlib
+import time
 
 
 ### PARAMETERS
@@ -27,13 +28,10 @@ MAX_STEPS = 15
 FINAL_STEP = MAX_STEPS + 1
 #### END OF PARAMETERS
 
-
-
 #### CLASSES
 class Node:
     def __init__(self, env, iden, conn_count):
         self.env = env
-        # self.action #TODO
         self.iden = iden
         self.out_links = []
         self.conn_count = conn_count
@@ -47,13 +45,15 @@ class Node:
 
         self.input_buffer = dict()
         self.count_value = dict()
+        self.blockchain = list()
+        self.blockchain.append(prev_block)
+        self.prev_block = prev_block
 
     def delay(self, env, timeout_n):
         yield env.timeout(timeout_n)
 
     def message_consumer(self, in_link):
         """unpack the message, verify the signature"""
-        # # print('id', self.iden)
         while True:
             msg = yield in_link.pipe.get()
             c_sign = msg[1]
@@ -96,17 +96,16 @@ class Node:
 
     def get_output_conn(self, link):
         """Takes a link as input, appends it to the 'out_links' list and retuns the corresponding *pipe*"""
-        # # print("link from", link.src, "to", link.dest)
         self.out_links.append(link)
         return link
 
     def message_generator(self, env):
-        #while True:2000
+        #while True:
             #self.input_buffer = dict()
             #self.count_value = dict()
             #print("generator called at", self.iden)
             step = 0
-            global prev_block
+            prev_block = self.prev_block
             round_no = prev_block.height
             prev_hsh = prev_block.hsh
             hsh, j = self.sortition((prev_hsh, round_no, step), T_PROPOSER, 'r') #TODO change 'r' to role
@@ -127,10 +126,7 @@ class Node:
                 self.recieved_id_cache.append((gossip_msg.msg_id, gossip_msg.node_id))
                 self.put(gossip_msg.message)
 
-                #env.process(self.delay(env, LAMBDA_PROPOSER))
                 yield env.timeout(LAMBDA_PROPOSER) #TODO : Decide the delays
-                #yield env.timeout(10000)
-                #print("After Gossiping block proposal messages ", self.iden)
                 p_vals = list()
                 p_vals.append(str(hx))
                 try:
@@ -148,9 +144,7 @@ class Node:
                 else: 
                     least_p_val = hx 
 
-                # print("After priority detection ", self.iden, " least", least_p_val, " mine", hx)
                 if hx == least_p_val:
-                    #print("After priority detection ", self.iden, " least", least_p_val, " mine", hx)
                     rand_string = str(random.getrandbits(32))
                     proposed_block = Block(prev_block.hsh, rand_string, prev_block.height)
                     bp_message_payload = str(prev_hsh) + "<@>" + rand_string + "<@>" + gossip_body
@@ -164,10 +158,6 @@ class Node:
             else:
                 yield env.timeout(LAMBDA_BLOCK)
         
-            #print("Before Before Before Before Node: " + str(self.iden) + " Time: " + str(env.now))
-            #yield env.timeout(10000)
-            #print("After After After After Node: " + str(self.iden) + " Time: " + str(env.now))
-
             try:
                 for msg in self.input_buffer[(round_no, step)]:
                     c_sign = msg[1]
@@ -186,8 +176,6 @@ class Node:
             if proposed_block == None:
                 proposed_block = Block(prev_block.hsh, "Empty", prev_block.height)
             
-            #yield env.timeout(10000)
-            
             print("Starting Reduction on block " + proposed_block.s + " from node " + str(self.iden))
             cur_block = yield env.process(self.reduction(proposed_block, round_no, prev_hsh))
             print("Starting BinaryBA", self.iden)
@@ -195,7 +183,6 @@ class Node:
             print("Counting Fina Votes", self.iden)
             hash_block = self.count_votes(round_no, FINAL_STEP, T_FINAL, COMMITTEE_FINAL_FACTOR)
 
-            # # #TODO final consensus logic
             if final_block.hsh == hash_block:
                 print("Final concensus achived on block at Node", self.iden)
                 final_block.state = "Final"
@@ -203,17 +190,20 @@ class Node:
                 print("Tentative concensus achived on block at Node", self.iden)
                 final_block.state = "Tentative"
 
-            # prev_block = final_block
-            # print("Block consensus achieved, block string", self.iden, final_block.s)
+            self.prev_block = final_block
+            print("Block consensus achieved, block string", self.iden, final_block.s)
+            self.blockchain.append(final_block)
 
-            #print("new round for", self.iden)
-            yield env.timeout(30) #TODO : Decide the delays
-        #   input()
+            print("New Round for", self.iden)
+            # print("Simulation End Time: ", env.now)
+            # end_time = time.time()
+            # print("System End Time: ", end_time)
+            #yield env.timeout(30000)
+
     def put(self, value):
         """Broadcast a *value* to all receivers."""
         if not self.out_links:
             raise RuntimeError('There are no output pipes.')
-        # events = [store.put(value) for store in self.out_pipes]
         events = []
         for link in self.out_links:
             events.append(link.pipe.put(value))
@@ -231,10 +221,6 @@ class Node:
         x = (hsh / (2 ** 256))
         #print('x', x)
         #print('lower, higher, p', lower, higher, p)
-        #if x < lower then return j as 0
-        #if x < lower:
-        #   print("Sortition called by Node " + str(self.iden) + " returned sub user count " + str(j))
-        #   return (hsh, j)
         while (x < lower or x >= higher) and j <= self.stake:
             j += 1
             lower = 0
@@ -252,6 +238,7 @@ class Node:
 
     def reduction(self, block, round_no, prev_hsh):
         #print("Reduction called by: " + str(self.iden))
+        prev_block = self.prev_block
         v_hash, v_j = self.sortition((prev_hsh, round_no, 0), T_PROPOSER, 'r')
         step = 1
 
@@ -272,7 +259,6 @@ class Node:
 
         hash_block = self.count_votes(round_no, step, T_STEP, COMMITTEE_STEP_FACTOR)
 
-        #print("Exiting reduction")
         if hash_block == None or hash_block != block.hsh:
             #print("Returning empty block from reduction at Node", self.iden)
             return empty_block
@@ -313,7 +299,7 @@ class Node:
                 #     print("Error occured during Public Key verification.")
                 #     continue
 
-                if prev_hsh != prev_block.hsh:
+                if prev_hsh != self.prev_block.hsh:
                     continue
 
                 hsh,votes = nodes[nid].sortition((prev_hsh, r_no, s_no), threshold, 'c')
@@ -346,6 +332,7 @@ class Node:
     def binaryBA(self, round_no, block, prev_hsh):
         step = 3
         cur_block = block
+        prev_block = self.prev_block
         empty_block = Block(prev_block.hsh, "Empty", prev_block.height)
         v_hash, v_j = self.sortition((prev_hsh, round_no, 0), T_PROPOSER, 'r')
 
@@ -414,7 +401,7 @@ class Node:
                 #     print("Error occured during Public Key verification.")
                 #     votes = 0
 
-                if prev_hsh != prev_block.hsh:
+                if prev_hsh != self.prev_block.hsh:
                     votes = 0
 
                 hsh,votes = self.sortition((prev_hsh, round_no, step), threshold, 'c')
@@ -480,12 +467,16 @@ class Block:
 def PRG(s, sk):
     random.seed(ecdsa.sign(str(s), sk))
     return random.getrandbits(256)
-
-
 ## END OF PUBLIC FUNCTIONS
 
-# 0. create 2000 nodes + housekeeping
 env = simpy.Environment()
+print("Number of Nodes", NODE_COUNT)
+print("Simulation Start Time: ", env.now)
+start_time = time.time()
+print("System Start Time: ", start_time)
+gb = Block(None, "We are buildling the best Algorand Discrete Event Simulator", -1)
+gb.state = "Final"
+prev_block = gb  # to know the current leader block
 
 pks = dict()
 nodes = list()
@@ -496,8 +487,6 @@ for i in range(NODE_COUNT):
     nodes.append(Node(env, i, node_conn_counts[i]))
     pks[nodes[i].iden] = nodes[i].pk
     W_total_stake += nodes[i].stake
-
-# print("Total stake:", W_total_stake)
 
 # 1. matrix of connections
 node_conn_matrix = list()
@@ -546,13 +535,9 @@ for i in range(NODE_COUNT):
             block_delay_matrix[j].append(y)
 
 #print("m", node_conn_matrix)
-# print("dm", delay_matrix)
-# print("bm", block_delay_matrix)
-gb = Block(None, "We are buildling the best Algorand Discrete Event Simulator", -1)
-gb.state = "Final"
-prev_block = gb  # to know the current leader block
+#print("dm", delay_matrix)
+#print("bm", block_delay_matrix)
 
-#print("Genesis bock created: " + str(prev_block))
 # 3. create links
 for i in range(NODE_COUNT):
     curr_node = nodes[i]
@@ -565,21 +550,7 @@ for i in range(NODE_COUNT):
         and the message_consumer will yield on it."""
         env.process(nodes[target].message_consumer(curr_node.get_output_conn(Link(env, i, target, delay, block_delay))))
 
-
-
-# print("publickeys", pks)
-# 4. call generator
-# 5. call consumers alongwith get_output_conn
-# x. TEST
-######################
-# m = Message(nodes[0], "hello there", 'b', -1, -1)
-# m2 = Message(nodes[0], "there", 'b', -1, -1)
-# nodes[0].put(m.message)
-# nodes[0].put(m2.message)
-
-
-
-#####################
-# END TEST
-
 env.run(until = None)
+print("Simulation End Time: ", env.now)
+end_time = time.time()
+print("System End Time: ", end_time)

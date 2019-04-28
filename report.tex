@@ -1,0 +1,147 @@
+\documentclass[11pt]{article}
+\usepackage{graphicx} 
+\usepackage{algorithm2e}
+\usepackage{mathtools}
+%Gummi|065|=)
+\title{\textbf{ASim: Algorand Simulator}\\ {\normalsize CS620 Project}}
+\author{Aman Jindal, 173050025, jindalaman@cse.iitb.ac.in\\
+		Harikrishnan R, 183050011, harikrishnan@cse.iitb.ac.in}
+
+\date{}
+\usepackage{graphicx}
+\begin{document}
+
+\maketitle
+\graphicspath{{images/}}
+\section{Introduction}
+Algorand is a blockchain/cryptocurrenncy protocol that makes use of proof of stake. It is a permissionless system that support a huge scale, good throughput, and transaction finality. As in the case of other proof of stake protocols, Algorand uses a certain amount of randomization and the stake to decide the next leader. This project is an implementation of the Algorand protocol.\\ 
+
+The project was implemented in Python 3 and makes use of the following libraries:
+\begin{itemize}
+	\item simpy: a framework for implementing a discrete event simulator. This was used to set up the discrete event simulator by using an 'environment' that is passed around in all the functions to simulate passing of time.
+	\item numpy: to obtain the required random distributions (uniform, gaussian).
+	\item fastecdsa: a faster implementation of Elliptic Curve DSA used for messsage signatures.
+	\item scipy.stats: To easily compute the binomial sum in sortition.
+	\item random: For different (pseudo-) random numbers involved.
+	\item hashlib: To generate SHA256 hash of the blocks.
+	\item time: To measure the execution time for debugging etc.
+\end {itemize}
+
+
+\section{The Algorand Algorithm}
+The algorithm that we implemented was as faithful to the Algorand algorithm as possible. The heart of the algorithm is a sortition function that makes use of the 
+\section{The Attack}
+A side channel attack is used to obtain the SM sequence corresponding to a known message, signature pair. If the SM sequence corresponding to an ephemeral key is known, then we can deduce part of the ephemeral key.\\
+
+The attack collects a sufficient number of message, signature pairs (m$_i$, (r$_i$, s$_i$))
+The paper focuses on the case where two substrings of bits in each ephemeral key are known. 
+
+The paper goes into several substitutions to get the following basis matrix, M:
+
+
+and v = ( 0, 0, ..., 0, v$_1$, v$_2$, ..., v$_{n-1}$ ) is the target (non-lattice) vector.
+Let b = (b$_0$, b$_1$, ..., b$_n$, d$_0$, d$_1$, ..., d$_n$) be the vector to be computed where the pair $<$ di, bi $>$ constitute the unknown blocks of the ith  ephemeral key. 
+
+Thus we have w - v = b. The Closest Vector Problem is to find the lattice vector w. 
+
+Since, the positions and the lengths of the known blocks would be different across keys, therefore, B is multiplied by a weight vector, D.
+
+\pagebreak
+The CVP can be reduced to an SVP instance. The new basis matrix B’ would be of dimension 2n + 1. \\
+
+
+where D is a 2n x 2n diagonal matrix 
+
+This is finally fed into an SVP solver.
+Result of the SVP instance will help us compute the DSA secret key.
+
+\section{Our Implementation}
+
+Instead of actually performing a side channel attack, we simulate the DSA parameters. Using Python’s Crypto library, we generate DSA parameters
+Then we generate a number of ephemeral keys, hash and the DSA signature corresponding to some message. Each ephemeral key is converted into SM sequence and then from the SM sequence we obtain a bit of string in which we can guess some of the bits\\
+
+
+
+\pagebreak
+
+We then used the following algorithm which helped with key retrieval in a \textbf{noise free} channel.\\
+
+
+\begin{algorithm}[H]
+\SetAlgoLined
+1. Sort S on the basis of the sum of the lengths of the interior block and the rightmost block.
+
+2. Let $\gamma_min$ be the minimum integer such that the total number of leaked bgits in the top $\gamma_min$ EKOs in S is $>=$ 160
+
+3. i = $\gamma_min$
+
+4. maxIter = $|$S$|$
+
+ \While{i $<=$ maxIter AND keyNotFound = true}{
+  Create an SVP instance using the top i EKO's from S
+  
+  Solve the SVP instance, compute the DSA private key and verify it's correctness
+  
+  \eIf{computed key is correct}{
+ keyNotFound = false
+   }{
+   i = i + 1
+  }
+ }
+ \caption{Noise-free key retrieval}
+\end{algorithm}
+
+\medskip
+
+
+\medskip
+
+
+\medskip
+
+
+\medskip
+
+To obtain the DSA signing key, we draw the top n EKOs. We build an SVP instance
+from the input provided by these EKOs and solve the SVP problem. Then we compute the
+DSA key and verify its correctness. If it's not correct, we continue this process but we now
+include the next EKO from S while retaining the existing EKOs. This is repeated
+until we obtain the correct DSA key.
+
+\pagebreak
+
+Then, we used the following algorithm to implement the same for a noisy channel. \\
+
+\begin{algorithm}[H]
+\SetAlgoLined
+1. Populate A with the fewest number of randomly selected EKOs from T such that the total number of bits leaked from the EKOs is A $>$160.
+
+2. T$`$ = T - A
+
+ \While{keyNotFound = true AND $|$A$|$ $<= \gamma_{max}$}{
+  Create an SVP instance using the EKO's from A
+  
+  Solve the SVP instance, compute the DSA private key and verify it's correctness
+  
+  \eIf{computed key is correct}{
+ keyNotFound = false
+ 
+ \textbf{return} computed DSA key and A
+   }{
+   Select a ranom EKO e from T$`$
+   
+   A = A $\cup$ \{e\}
+   
+   T$`$ = T$`$ - \{e\}
+  }
+ }
+3. Repeat till key is not found and iter $<$ iterMax\\
+
+
+\medskip
+
+
+ \caption{Noisy channel key retrieval}
+\end{algorithm}
+
+\end{document}. 

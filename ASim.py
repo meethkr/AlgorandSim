@@ -9,22 +9,22 @@ import time
 
 
 ### PARAMETERS
-NODE_COUNT = 2000
-MIN_DEG = 4
-MAX_DEG = 8
+NODE_COUNT = 256
+MIN_DEG = 2
+MAX_DEG = 4
 
 COMMITTEE_STEP_FACTOR = 0.685
 COMMITTEE_FINAL_FACTOR = 0.74
 
-T_PROPOSER = NODE_COUNT * 0.01 
-T_STEP = NODE_COUNT * 0.1
-T_FINAL = NODE_COUNT * 0.01
+T_PROPOSER = 5
+T_STEP = 32
+T_FINAL = 5 
 
 LAMBDA_PROPOSER = 3 * 1000
 LAMBDA_BLOCK = 30 * 1000
 LAMBDA_STEP = 3 * 1000
 
-MAX_STEPS = 15
+MAX_STEPS = 10
 FINAL_STEP = MAX_STEPS + 1
 #### END OF PARAMETERS
 
@@ -180,7 +180,7 @@ class Node:
             cur_block = yield env.process(self.reduction(proposed_block, round_no, prev_hsh))
             print("Starting BinaryBA", self.iden)
             final_block = yield env.process(self.binaryBA(round_no, cur_block, prev_hsh))
-            print("Counting Fina Votes", self.iden)
+            print("Counting Final Votes", self.iden)
             hash_block = self.count_votes(round_no, FINAL_STEP, T_FINAL, COMMITTEE_FINAL_FACTOR)
 
             if final_block.hsh == hash_block:

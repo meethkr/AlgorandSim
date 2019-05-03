@@ -559,9 +559,9 @@ for i in range(NODE_COUNT):
             block_delay_matrix[i].append(y)
             block_delay_matrix[j].append(y)
 
-#print("m", node_conn_matrix, file = f)
-#print("dm", delay_matrix, file = f)
-#print("bm", block_delay_matrix, file = f)
+print("m", node_conn_matrix, file = f)
+print("dm", delay_matrix, file = f)
+print("bm", block_delay_matrix, file = f)
 
 # 3. create links
 for i in range(NODE_COUNT):

@@ -16,7 +16,7 @@ MAX_DEG = 4
 COMMITTEE_STEP_FACTOR = 0.685
 COMMITTEE_FINAL_FACTOR = 0.74
 
-T_PROPOSER = 15
+T_PROPOSER = 3
 T_STEP = 32
 T_FINAL = T_PROPOSER
 
@@ -590,7 +590,7 @@ for i in range(NODE_COUNT):
             block_delay_matrix[i].append(y)
             block_delay_matrix[j].append(y)
 
-#print("m", node_conn_matrix, file = f)
+print("matrix", node_conn_matrix, file = f)
 #print("dm", delay_matrix, file = f)
 #print("bm", block_delay_matrix, file = f)
 

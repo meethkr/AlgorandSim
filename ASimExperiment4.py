@@ -6,6 +6,7 @@ import numpy as np
 import random
 import hashlib
 import time
+import csv
 
 
 ### PARAMETERS
@@ -18,7 +19,7 @@ COMMITTEE_FINAL_FACTOR = 0.74
 
 T_PROPOSER = 5
 T_STEP = 32
-T_FINAL = 5 
+T_FINAL = T_PROPOSER
 
 LAMBDA_PROPOSER = 3 * 1000
 LAMBDA_BLOCK = 30 * 1000
@@ -26,14 +27,25 @@ LAMBDA_STEP = 3 * 1000
 
 MAX_STEPS = 10
 FINAL_STEP = MAX_STEPS + 1
-MAX_ROUNDS = 64
+MAX_ROUNDS = 164
+
+MAX_ADVERSARY_ROUNDS = 5
+ADVERSARY_FRACTION = 0.10
 #### END OF PARAMETERS
 
-
-f = open("LogsExp1.txt", "w")
+f = open("LogsExp4_" + str(ADVERSARY_FRACTION) + "_3.txt", "w")
 no_of_subs = dict()
 subusers_per_step_round = dict()
 
+counter = NODE_COUNT
+current_selected_block = dict()
+
+is_adversary_selected = False
+current_adversary = None
+count_adversary_rounds = 0
+adversary_nodes = list()
+adversary_blocks = dict()
+adversary_rounds = dict()
 #### CLASSES
 class Node:
     def __init__(self, env, iden, conn_count):
@@ -54,12 +66,18 @@ class Node:
         self.blockchain = list()
         self.blockchain.append(prev_block)
         self.prev_block = prev_block
+        self.step_count = 0
+        self.proposed_block = None
+        self.adversary_round_count = 0
 
     def delay(self, env, timeout_n):
         yield env.timeout(timeout_n)
 
     def message_consumer(self, in_link):
         """unpack the message, verify the signature"""
+        global is_adversary_selected
+        global adversary_nodes
+        global current_adversary
         while True:
             msg = yield in_link.pipe.get()
             c_sign = msg[1]
@@ -88,8 +106,23 @@ class Node:
                 #else:
                 #    print("Error occured during Public Key verification.", file = f)
                 #    continue
-
-                self.put(msg)
+                if m_type == 'b':
+                    if is_adversary_selected == True:
+                        if self.iden in adversary_nodes:
+                            if self.iden != current_adversary:
+                                while self.proposed_block is None:
+                                    yield env.timeout(LAMBDA_STEP)
+                                prev_hsh, rand_string, priority_payload = payload.split("<@>")
+                                if prev_hsh == self.proposed_block.prev_hsh:
+                                    self.put(msg)
+                            else:
+                                self.put(msg)
+                        else:
+                            self.put(msg)
+                    else:
+                        self.put(msg)
+                else:            
+                    self.put(msg)
 
     def get_output_conn(self, link):
         """Takes a link as input, appends it to the 'out_links' list and retuns the corresponding *pipe*"""
@@ -97,18 +130,36 @@ class Node:
         return link
 
     def message_generator(self, env):
+        global counter
+        global current_selected_block
+        global adversary_nodes
+        global adversary_blocks
+        global count_adversary_rounds
+        global is_adversary_selected
+        global adversary_rounds
+        global current_adversary
         while True:
             round_start_time = time.time()
             simulation_start_time = env.now
             
             self.input_buffer = dict()
             self.count_value = dict()
+            self.proposed_block = None
+            self.step_count = 0
             
             step = 0
             prev_block = self.prev_block
             round_no = prev_block.height
             prev_hsh = prev_block.hsh
             hsh, j = self.sortition((prev_hsh, round_no, step), T_PROPOSER, 'r', round_no, 0, True)
+
+
+            if self.iden in adversary_nodes:
+                rand_string = str(random.getrandbits(32))
+                adversary_block1 = Block(prev_block.hsh, rand_string, prev_block.height)
+                rand_string = str(random.getrandbits(32))
+                adversary_block2 = Block(prev_block.hsh, rand_string, prev_block.height)
+                adversary_blocks[self.iden] = (adversary_block1, adversary_block2)
 
             proposed_block = None
             if j > 0:
@@ -126,6 +177,7 @@ class Node:
                 self.put(gossip_msg.message)
 
                 yield env.timeout(LAMBDA_PROPOSER)
+               
                 p_vals = list()
                 proposer_dict = dict()
                 p_vals.append(str(hx))
@@ -149,73 +201,128 @@ class Node:
                 sorted_priority = sorted(proposer_dict.items(), key = lambda kv:(kv[1], kv[0]))
                 print("Received proposals from other nodes, at Node:", self.iden, "are", str(sorted_priority), file = f)
                 if hx == least_p_val:
-                    rand_string = str(random.getrandbits(32))
-                    proposed_block = Block(prev_block.hsh, rand_string, prev_block.height)
-                    bp_message_payload = str(prev_hsh) + "<@>" + rand_string + "<@>" + gossip_body
-                    bp_message_object = Message(self, bp_message_payload, 'b', round_no, step)
-                    self.recieved_id_cache.append((bp_message_object.msg_id, bp_message_object.node_id))
-                    self.put(bp_message_object.message)
-                    print("Block proposer for Round:", round_no, "Node:", self.iden, file = f)
+                    if self.iden in adversary_nodes:
+                        print("I am a byzantine adversary:", self.iden,"selected as highest proposer for round:", round_no)
+                        print("I am a byzantine adversary:", self.iden,"selected as highest proposer for round:", round_no, file = f)
+                        is_adversary_selected = True
+                        count_adversary_rounds += 1
+                        current_adversary = self.iden
+                        bp_message_payload = str(prev_hsh) + "<@>" + adversary_block1.s + "<@>" + gossip_body
+                        bp_message_object = Message(self, bp_message_payload, 'b', round_no, step)
+                        self.recieved_id_cache.append((bp_message_object.msg_id, bp_message_object.node_id))
+                        self.put(bp_message_object.message)
+                        bp_message_payload = str(prev_hsh) + "<@>" + adversary_block2.s + "<@>" + gossip_body
+                        bp_message_object = Message(self, bp_message_payload, 'b', round_no, step)
+                        self.recieved_id_cache.append((bp_message_object.msg_id, bp_message_object.node_id))
+                        self.put(bp_message_object.message)
+                        print("Block proposer for Round:", round_no, "Node:", self.iden, file = f)
+                    else:
+                        rand_string = str(random.getrandbits(32))
+                        proposed_block = Block(prev_block.hsh, rand_string, prev_block.height)
+                        bp_message_payload = str(prev_hsh) + "<@>" + rand_string + "<@>" + gossip_body
+                        bp_message_object = Message(self, bp_message_payload, 'b', round_no, step)
+                        self.recieved_id_cache.append((bp_message_object.msg_id, bp_message_object.node_id))
+                        self.put(bp_message_object.message)
+                        print("Block proposer for Round:", round_no, "Node:", self.iden, file = f)
 
             if proposed_block == None:
                 yield env.timeout(LAMBDA_PROPOSER + LAMBDA_BLOCK)
             else:
                 yield env.timeout(LAMBDA_BLOCK)
         
-            try:
-                for msg in self.input_buffer[(round_no, step)]:
-                    c_sign = msg[1]
-                    decoded_msg = msg[0]
-                    payload, pk, mid, nid, m_type, roundn, stepn = decoded_msg.split("<|>")
+            if is_adversary_selected == True and self.iden in adversary_nodes:
+                block_no = random.randint(0,1)
+                self.proposed_block = adversary_blocks.get(current_adversary)[block_no]
+                proposed_block = self.proposed_block
+            else:
+                try:
+                    for msg in self.input_buffer[(round_no, step)]:
+                        c_sign = msg[1]
+                        decoded_msg = msg[0]
+                        payload, pk, mid, nid, m_type, roundn, stepn = decoded_msg.split("<|>")
 
-                    if m_type == 'b' and proposed_block == None:
-                        #print("Block message recieved from " + str(nid) + " at node" + str(self.iden), file = f)
-                        prev_hsh, rand_string, priority_payload = payload.split("<@>")
-                        proposed_block = Block(prev_block.hsh, rand_string, prev_block.height)
-                    else:
-                        continue
-            except KeyError as e:
-                print("No matching keys", e, " buffer:", self.input_buffer, file = f)
+                        if m_type == 'b' and proposed_block == None:
+                            #print("Block message recieved from " + str(nid) + " at node" + str(self.iden), file = f)
+                            prev_hsh, rand_string, priority_payload = payload.split("<@>")
+                            proposed_block = Block(prev_block.hsh, rand_string, prev_block.height)
+                        else:
+                            continue
+                except KeyError as e:
+                    print("No matching keys", e, " buffer:", self.input_buffer, file = f)
 
             if proposed_block == None:
                 proposed_block = Block(prev_block.hsh, "Empty", prev_block.height)
-            
+           
             #print("Starting Reduction on block " + proposed_block.s + " from node " + str(self.iden), file = f)
             cur_block = yield env.process(self.reduction(proposed_block, round_no, prev_hsh))
             #print("Starting BinaryBA", self.iden, file = f)
             final_block = yield env.process(self.binaryBA(round_no, cur_block, prev_hsh))
             #print("Counting Final Votes", self.iden, file = f)
             hash_block = self.count_votes(round_no, FINAL_STEP, T_FINAL, COMMITTEE_FINAL_FACTOR)
-            
-            global global_blockchain
 
             if final_block.hsh == hash_block:
                 print("Final concensus achieved on block: ",final_block.s, "in Round:", round_no, "at Node:", self.iden, file = f)
                 final_block.state = "Final"
-                # if len(global_blockchain) <= round_no + 1 or\
-                #         global_blockchain[round_no + 1] is None or\
-                #         global_blockchain[round_no + 1] == "None" or\
-                #         global_blockchain[round_no + 1] == "Empty":
-                #     global_blockchain[round_no + 1] = final_block.s
             else:
                 print("Tentative concensus achieved on block: ",final_block.s, "in Round:", round_no,"at Node:", self.iden, file = f)
                 final_block.state = "Tentative"
-                # if len(global_blockchain) <= round_no + 1 or\
-                #     global_blockchain[round_no + 1] is None:
-                #     global_blockchain[round_no + 1] = "None"
+
+            if final_block.state == "Final":
+                current_selected_block[final_block.s] = current_selected_block.get(final_block.s, (0, final_block))
+                current_selected_block[final_block.s] = (current_selected_block[final_block.s][0] + 1, final_block)
+ 
+            yield env.timeout(LAMBDA_BLOCK)
+
+            max_block_str = None
+            counter -= 1
+            #print("Node", self.iden, "reduced the counter by 1")
+
+            if is_adversary_selected == True:
+                self.adversary_round_count += 1
+                #print("Adversary Round Count:", self.adversary_round_count, "For Node:", self.iden)
+                adversary_rounds[round_no] = max(self.step_count, adversary_rounds.get(round_no, 0))
+
+            if counter == 0:
+                print("Current Global Dict:", current_selected_block)
+                max_val = -1 
+                if len(current_selected_block) == 0:
+                    print("Empty selected block list at round", round_no)
+
+                for i in current_selected_block.keys():
+                    if current_selected_block[i][0] > max_val:
+                        max_val = current_selected_block[i][0]
+                        max_block_str = str(i) 
+
+                current_selected_block = dict() 
+                if max_block_str is None:
+                    print("Max voted string is None at round", round_no)
+
+                print("Node", self.iden, "is the last to round", round_no)
+                counter = NODE_COUNT
+                adversary_blocks = dict()
+                is_adversary_selected = False
+                current_adversary = None
+                round_end_time = time.time()
+                simulation_end_time = env.now
+                print("System Round Time: ", round_end_time - round_start_time, "for Round:", round_no, "at Node:", self.iden)
+                print("Simulator Round Time: ", simulation_end_time - simulation_start_time, "for Round:", round_no, "at Node:", self.iden)
+                print("Adversary Round Dict:", adversary_rounds)            
+
+            while counter != NODE_COUNT:
+                #print("Node", self.iden, "waiting")
+                yield (env.timeout(LAMBDA_STEP))
+
+            if max_block_str is not None: 
+                final_block.s = max_block_str
 
             self.prev_block = final_block
             self.blockchain.append(final_block)
 
-            print("Starting New Round:", (round_no + 1)," for Node:", self.iden, file = f)
- 
-            yield env.timeout(LAMBDA_BLOCK)
-            round_end_time = time.time()
-            simulation_end_time = env.now
-            print("System Round Time: ", round_end_time - round_start_time, "for Round:", round_no, "at Node:", self.iden)
-            print("Simulator Round Time: ", simulation_end_time - simulation_start_time, "for Round:", round_no, "at Node:", self.iden)
-            if round_no == MAX_ROUNDS - 1:
+            if round_no == MAX_ROUNDS - 1 or self.adversary_round_count == MAX_ADVERSARY_ROUNDS:
                 break
+
+            print("Starting New Round:", (round_no + 1)," for Node:", self.iden, file = f)
+
 
     def put(self, value):
         """Broadcast a *value* to all receivers."""
@@ -285,13 +392,32 @@ class Node:
     def committee_vote(self, prev_hsh, round_no, step, threshold, block, v_hash, v_j):
         #print("Doing committee_vote for", self.iden, " at round", round_no, " and", step, file = f)
         hsh, j = self.sortition((prev_hsh, round_no, step), threshold, 'c', round_no, step, True)
+        global adversary_blocks
+        global adversary_nodes
+        global current_adversary
         if j > 0:
-            vote_body = str(prev_hsh) + "<$>" + str(block.hsh) + "<$>" + str(round_no) + "<$>"\
-             + str(step) + "<$>" + str(j) + "<$>" + str(hsh)
-            vote_msg = Message(self, vote_body, 'nb', round_no, step)
-            #print("Voting for step: " + str(step), file = f)
-            self.recieved_id_cache.append((vote_msg.msg_id, vote_msg.node_id))      
-            self.put(vote_msg.message)
+            if is_adversary_selected == True and self.iden in adversary_nodes:
+                block = adversary_blocks.get(current_adversary)[0]
+                vote_body = str(prev_hsh) + "<$>" + str(block.hsh) + "<$>" + str(round_no) + "<$>"\
+                 + str(step) + "<$>" + str(j) + "<$>" + str(hsh)
+                vote_msg = Message(self, vote_body, 'nb', round_no, step)
+                #print("Voting for step: " + str(step), file = f)
+                self.recieved_id_cache.append((vote_msg.msg_id, vote_msg.node_id))      
+                self.put(vote_msg.message)
+                block = adversary_blocks.get(current_adversary)[1]
+                vote_body = str(prev_hsh) + "<$>" + str(block.hsh) + "<$>" + str(round_no) + "<$>"\
+                 + str(step) + "<$>" + str(j) + "<$>" + str(hsh)
+                vote_msg = Message(self, vote_body, 'nb', round_no, step)
+                #print("Voting for step: " + str(step), file = f)
+                self.recieved_id_cache.append((vote_msg.msg_id, vote_msg.node_id))      
+                self.put(vote_msg.message)
+            else:
+                vote_body = str(prev_hsh) + "<$>" + str(block.hsh) + "<$>" + str(round_no) + "<$>"\
+                 + str(step) + "<$>" + str(j) + "<$>" + str(hsh)
+                vote_msg = Message(self, vote_body, 'nb', round_no, step)
+                #print("Voting for step: " + str(step), file = f)
+                self.recieved_id_cache.append((vote_msg.msg_id, vote_msg.node_id))      
+                self.put(vote_msg.message)
 
 
     def count_votes(self, round_no, step, threshold, committee_size_factor):
@@ -347,6 +473,7 @@ class Node:
 
     def binaryBA(self, round_no, block, prev_hsh):
         step = 3
+        self.step_count = 3
         cur_block = block
         prev_block = self.prev_block
         empty_block = Block(prev_block.hsh, "Empty", prev_block.height)
@@ -369,6 +496,7 @@ class Node:
                 #print("Returning block from BinaryBA from Node", self.iden, " as ", cur_block.s, file = f)
                 return cur_block
             step += 1
+            self.step_count += 1
 
             self.committee_vote(prev_hsh, round_no, step, T_STEP, cur_block, v_hash, v_j)
             yield env.timeout(LAMBDA_STEP)
@@ -384,6 +512,7 @@ class Node:
                 return cur_block
 
             step += 1
+            self.step_count += 1
 
             self.committee_vote(prev_hsh, round_no, step, T_STEP, cur_block, v_hash, v_j)
             yield env.timeout(LAMBDA_STEP)
@@ -396,6 +525,7 @@ class Node:
                     cur_block = empty_block
 
             step += 1
+            self.step_count += 1
 
         return cur_block
 
@@ -504,122 +634,57 @@ for i in range(NODE_COUNT):
     pks[nodes[i].iden] = nodes[i].pk
     W_total_stake += nodes[i].stake
 
-# 1. matrix of connections
-node_conn_matrix = list()
-for i in range(NODE_COUNT):
-    node_conn_matrix.append([(i-1) % (NODE_COUNT), (i+1) % (NODE_COUNT)])
-    node_conn_counts[i] -= 2
+with open('node_matrix.csv', 'r') as input_file:
+    reader = csv.reader(input_file)
+    node_conn_matrix = list(reader)
+    #print(node_conn_matrix)
+input_file.close()
 
+with open('delay_matrix.csv', 'r') as input_file:
+    reader = csv.reader(input_file)
+    delay_matrix = list(reader)
+    #print(delay_matrix)
+input_file.close()
 
-for i in range(NODE_COUNT):
-    while i != NODE_COUNT - 1 and node_conn_counts[i] > 0:
-        eflag = False
-        ti = np.random.randint(i + 1, NODE_COUNT)
-        ti_old = ti
-        while ((node_conn_counts[ti] == 0) or (ti in node_conn_matrix[i]) or (ti == i)):
-            ti = (ti + 1) % NODE_COUNT
-            if ti == NODE_COUNT:
-                ti = i + 1
-            elif ti == ti_old:
-                eflag = True
-                break
+with open('block_delay_matrix.csv', 'r') as input_file:
+    reader = csv.reader(input_file)
+    block_delay_matrix = list(reader)
+    #print(block_delay_matrix)
+input_file.close
 
-        if eflag == False:
-            node_conn_counts[i] -= 1
-            node_conn_counts[ti] -= 1
-            node_conn_matrix[i].append(ti)
-            node_conn_matrix[ti].append(i)
-        else:
-            break
+print("matrix", node_conn_matrix, file = f)
+print("delay_matrix", delay_matrix, file = f)
+print("block_delay_matrix", block_delay_matrix, file = f)
 
-# 2. delays
-delay_matrix = list()
-block_delay_matrix = list()
-for i in node_conn_matrix:
-    i.sort()
-    delay_matrix.append([])
-    block_delay_matrix.append([])
+total_adversary = int(NODE_COUNT * ADVERSARY_FRACTION)
 
-for i in range(NODE_COUNT):
-    for j in node_conn_matrix[i]:
-        if j > i:
-            x = int(max(np.random.normal(30, 64), 0))
-            delay_matrix[i].append(x)
-            delay_matrix[j].append(x)
-            y = int(max(np.random.normal(200, 400), 0))
-            block_delay_matrix[i].append(y)
-            block_delay_matrix[j].append(y)
+adversary_nodes = random.sample(range(0, NODE_COUNT), total_adversary)
 
-print("m", node_conn_matrix, file = f)
-print("dm", delay_matrix, file = f)
-print("bm", block_delay_matrix, file = f)
+print("Adversary Nodes:", adversary_nodes, file = f)
+print("Adversary Nodes:", adversary_nodes)
 
 # 3. create links
 for i in range(NODE_COUNT):
     curr_node = nodes[i]
     env.process(curr_node.message_generator(env))
     for j in range(len(node_conn_matrix[i])):
-        target = node_conn_matrix[i][j]
-        delay = delay_matrix[i][j]
-        block_delay = block_delay_matrix[i][j]
+        target = int(node_conn_matrix[i][j])
+        delay = int(delay_matrix[i][j])
+        block_delay = int(block_delay_matrix[i][j])
         """Instantiate a link, return it to get_output_conn, get_output_conn will return the pipe which is given to the message_consumer
         and the message_consumer will yield on it."""
         env.process(nodes[target].message_consumer(curr_node.get_output_conn(Link(env, i, target, delay, block_delay))))
 
 
 #4. GLOBAL VARIABLES FOR EXPIREMENTS
-global_blockchain = dict()
-global_blockchain[0] = gb.s
 
-outc_1 = open("output_t32_1.csv", "w")
-outc_2 = open("output_t32_2.csv", "w")
-outc_3 = open("output_blockchain.csv", "w")
+outc_3 = open("output_blockchain_exp4_" + str(ADVERSARY_FRACTION) + "_3.csv", "w")
 
 env.run(until = None)
-
-for i in no_of_subs.keys():
-    print(str(i) + "," + str(no_of_subs[i]/MAX_ROUNDS))
-    outc_1.write(str(i) + "," + str(no_of_subs[i]/MAX_ROUNDS))
-    outc_1.write("\n")
-
-step_sum = dict()
-step_fractions = dict()
-
-for i in subusers_per_step_round.keys():
-    stk = i[0]
-    stn = i[1]
-    rdn = i[2]
-    jval = subusers_per_step_round[i]
-    step_sum[(stk, rdn)] = step_sum.get((stk, rdn), 0) + jval
-
-for i in subusers_per_step_round.keys():
-    stk = i[0]
-    stn = i[1]
-    rdn = i[2]
-    jval = subusers_per_step_round[i]
-
-    if step_sum[(stk, rdn)] != 0:
-        step_fractions[(stk, stn)] = step_fractions.get((stk, stn), 0) + jval / step_sum[(stk, rdn)]
-
-stake_fraction = dict()
-
-for i in step_fractions.keys():
-    stk = i[0]
-    stn = i[1]
-    stake_fraction[stk] = stake_fraction.get(stk, 0) + step_fractions[i]
-
-for i in stake_fraction.keys():
-    print(str(i) + "," + str(stake_fraction[i]/MAX_ROUNDS))
-    outc_2.write(str(i) + "," + str(stake_fraction[i]/MAX_ROUNDS))
-    outc_2.write("\n")
-
 
 print("Simulation End Time: ", env.now, file = f)
 end_time = time.time()
 print("System End Time: ", end_time, file = f)
-
-for i in global_blockchain.keys():
-    print("Block:", i, "is:", global_blockchain[i])
 
 for i in range(NODE_COUNT):
     outc_3.write(str(i+1) + ",")
@@ -627,7 +692,7 @@ for i in range(NODE_COUNT):
         outc_3.write(block.s + ",")
     outc_3.write("\n")
 
+print("Step Counter: ", adversary_rounds, file = f)
+print("Step Counter: ", adversary_rounds)
 f.close()
-outc_1.close()
-outc_2.close()
 outc_3.close()
